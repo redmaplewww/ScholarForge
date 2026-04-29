@@ -1,0 +1,12 @@
+node_modules/
+.angsheng/
+.project/runs/
+bun.lock
+*.log
+.env
+src/
+packages/
+tsconfig.json
+tsconfig.base.json
+build.ts
+vite.config.ts

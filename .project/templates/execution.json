@@ -1,0 +1,15 @@
+{
+  "default_mode": "local",
+  "local": {
+    "command": [],
+    "log_flag": "--log"
+  },
+  "linux": {
+    "command": [],
+    "log_flag": "--log"
+  },
+  "windows": {
+    "command": [],
+    "log_flag": "--log"
+  }
+}
