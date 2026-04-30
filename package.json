@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "init-runtime": "bun run scripts/init-runtime.ts",
-    "chat": "bun run scripts/dev.ts --agent domain-coordinator",
+    "chat": "bun run scripts/dev.ts",
     "chat:setup": "bun run scripts/dev.ts --agent setup-coordinator",
     "setup": "bun run scripts/setup-wizard.ts",
     "setup:ai": "bun run scripts/setup-wizard.ts --ai",
@@ -98,6 +98,7 @@
     "@types/turndown": "^5.0.6",
     "@types/ws": "^8.18.1",
     "ajv": "^8.18.0",
+    "agent-base": "^7.1.4",
     "asciichart": "^1.5.25",
     "audio-capture-napi": "workspace:*",
     "auto-bind": "^5.0.1",

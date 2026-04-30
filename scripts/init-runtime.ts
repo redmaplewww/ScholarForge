@@ -118,6 +118,49 @@ function syncAgents(projectRoot: string) {
   console.log(`  [OK]   .angsheng/agents/ (${n} 个已更新)`)
 }
 
+function detectCoordinator(projectRoot: string): string | null {
+  const agentsDir = resolve(projectRoot, 'agents')
+  if (!existsSync(agentsDir)) return null
+
+  const files = readdirSync(agentsDir).filter(f => f.endsWith('.md'))
+
+  for (const f of files) {
+    try {
+      const content = readFileSync(join(agentsDir, f), 'utf8')
+      const match = content.match(/^---\n[\s\S]*?^name:\s*(.+?)$/m)
+      if (match) {
+        const name = match[1].trim()
+        if (
+          name.endsWith('-coordinator') &&
+          !name.startsWith('domain-') &&
+          !name.startsWith('kb-')
+        ) {
+          return name
+        }
+      }
+    } catch {}
+  }
+  return null
+}
+
+function updateSetupConfig(projectRoot: string, coordinator: string) {
+  const configPath = resolve(projectRoot, '.project', 'setup-config.json')
+  mkdirSync(resolve(projectRoot, '.project'), { recursive: true })
+
+  let config: Record<string, any> = {}
+  if (existsSync(configPath)) {
+    try {
+      config = JSON.parse(readFileSync(configPath, 'utf8'))
+    } catch {}
+  }
+
+  if (config.coordinator === coordinator) return
+
+  config.coordinator = coordinator
+  writeFileSync(configPath, JSON.stringify(config, null, 2))
+  console.log(`  [OK]   setup-config.json coordinator = ${coordinator}`)
+}
+
 function createAngshengMd(projectRoot: string) {
   const angPath = resolve(projectRoot, 'ANGSHENG.md')
   if (existsSync(angPath)) return
@@ -223,6 +266,11 @@ async function main() {
   syncAgents(projectRoot)
   mkdirSync(resolve(projectRoot, '.project', 'runs'), { recursive: true })
   createAngshengMd(projectRoot)
+
+  const coordinator = detectCoordinator(projectRoot)
+  if (coordinator) {
+    updateSetupConfig(projectRoot, coordinator)
+  }
   console.log('')
 
   console.log('  ============================================================')
@@ -234,7 +282,11 @@ async function main() {
   console.log('')
   console.log('  使用方法:')
   console.log('')
-  console.log('    bun run chat           启动对话 (domain-coordinator)')
+  if (coordinator) {
+    console.log(`    bun run chat           启动对话 (${coordinator})`)
+  } else {
+    console.log('    bun run chat           启动对话 (domain-coordinator)')
+  }
   console.log('    bun run setup          配置领域')
   console.log('    bun run chat:setup     AI 辅助配置')
   console.log('')

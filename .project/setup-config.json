@@ -26,6 +26,7 @@
     "externalTools": [],
     "initialContent": "我要做的是matlab里的simulink仿真，是电气仿真相关的，基于的是matlab代码计算，输出内容是电信号什么的，我的工作流就是从仿真需求到仿真设计到代码编写到代码执行再到最后的后处理这一整个流程，需要保留完整的可复现文件，我有大量的过往案例和手册，所以也要做知识库，包括自学习什么的也要加好"
   },
+  "coordinator": "simulink-coordinator",
   "cli": {
     "defaultSubcommand": "plan",
     "subcommands": [],
