@@ -22,21 +22,12 @@ if (!existsSync(cliPath)) {
 }
 
 function resolveAgentName(args: string[]): string {
+  // 如果手动传了 --agent，优先使用
   const agentIdx = args.indexOf('--agent')
   if (agentIdx !== -1 && args[agentIdx + 1]) {
     return args[agentIdx + 1]
   }
-
-  const configPath = join(projectRoot, '.project', 'setup-config.json')
-  if (existsSync(configPath)) {
-    try {
-      const config = JSON.parse(readFileSync(configPath, 'utf8'))
-      if (config.coordinator) {
-        return config.coordinator
-      }
-    } catch {}
-  }
-
+  // 默认始终启动 domain-coordinator
   return 'domain-coordinator'
 }
 

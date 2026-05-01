@@ -118,47 +118,69 @@ function syncAgents(projectRoot: string) {
   console.log(`  [OK]   .angsheng/agents/ (${n} 个已更新)`)
 }
 
-function detectCoordinator(projectRoot: string): string | null {
+function detectTeamCoordinators(projectRoot: string): string[] {
   const agentsDir = resolve(projectRoot, 'agents')
-  if (!existsSync(agentsDir)) return null
+  if (!existsSync(agentsDir)) return []
 
   const files = readdirSync(agentsDir).filter(f => f.endsWith('.md'))
+  const teams: string[] = []
 
   for (const f of files) {
     try {
       const content = readFileSync(join(agentsDir, f), 'utf8')
-      const match = content.match(/^---\n[\s\S]*?^name:\s*(.+?)$/m)
+      const match = content.match(/^name:\s*(.+?)$/m)
       if (match) {
         const name = match[1].trim()
-        if (
-          name.endsWith('-coordinator') &&
-          !name.startsWith('domain-') &&
-          !name.startsWith('kb-')
-        ) {
-          return name
+        const isSkip =
+          name === 'domain-coordinator' ||
+          name === 'setup-coordinator' ||
+          name.endsWith('-setup-coordinator') ||
+          name.startsWith('domain-') ||
+          name.includes('-kb-') ||
+          name.includes('-reviewer')
+        if (name.endsWith('-coordinator') && !isSkip) {
+          teams.push(name)
         }
       }
     } catch {}
   }
-  return null
+  return teams
 }
 
-function updateSetupConfig(projectRoot: string, coordinator: string) {
-  const configPath = resolve(projectRoot, '.project', 'setup-config.json')
-  mkdirSync(resolve(projectRoot, '.project'), { recursive: true })
+function generateTeamScripts(projectRoot: string, teams: string[]) {
+  const pkgPath = resolve(projectRoot, 'package.json')
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+  let changed = false
 
-  let config: Record<string, any> = {}
-  if (existsSync(configPath)) {
-    try {
-      config = JSON.parse(readFileSync(configPath, 'utf8'))
-    } catch {}
+  // 移除旧的无效团队脚本
+  for (const key of Object.keys(pkg.scripts)) {
+    if (!key.startsWith('team:')) continue
+    const agentName = pkg.scripts[key]
+    const isValid = teams.some(team => {
+      const expected = `bun run scripts/dev.ts --agent ${team}`
+      return agentName === expected
+    })
+    if (!isValid) {
+      delete pkg.scripts[key]
+      changed = true
+    }
   }
 
-  if (config.coordinator === coordinator) return
+  // 添加新的团队脚本
+  for (const team of teams) {
+    const scriptName = team.replace('-coordinator', '')
+    const scriptKey = `team:${scriptName}`
+    if (pkg.scripts[scriptKey] !== undefined) continue
+    pkg.scripts[scriptKey] = `bun run scripts/dev.ts --agent ${team}`
+    changed = true
+  }
 
-  config.coordinator = coordinator
-  writeFileSync(configPath, JSON.stringify(config, null, 2))
-  console.log(`  [OK]   setup-config.json coordinator = ${coordinator}`)
+  if (changed) {
+    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
+    console.log(`  [OK]   package.json 团队脚本已更新`)
+  } else {
+    console.log('  [skip] package.json 团队脚本无需更新')
+  }
 }
 
 function createAngshengMd(projectRoot: string) {
@@ -267,9 +289,9 @@ async function main() {
   mkdirSync(resolve(projectRoot, '.project', 'runs'), { recursive: true })
   createAngshengMd(projectRoot)
 
-  const coordinator = detectCoordinator(projectRoot)
-  if (coordinator) {
-    updateSetupConfig(projectRoot, coordinator)
+  const teams = detectTeamCoordinators(projectRoot)
+  if (teams.length > 0) {
+    generateTeamScripts(projectRoot, teams)
   }
   console.log('')
 
@@ -282,13 +304,17 @@ async function main() {
   console.log('')
   console.log('  使用方法:')
   console.log('')
-  if (coordinator) {
-    console.log(`    bun run chat           启动对话 (${coordinator})`)
-  } else {
-    console.log('    bun run chat           启动对话 (domain-coordinator)')
-  }
+  console.log('    bun run chat           启动通用对话 (domain-coordinator)')
   console.log('    bun run setup          配置领域')
   console.log('    bun run chat:setup     AI 辅助配置')
+  if (teams.length > 0) {
+    console.log('')
+    console.log('  团队快捷入口:')
+    for (const team of teams) {
+      const key = team.replace('-coordinator', '')
+      console.log(`    bun run team:${key.padEnd(16)}启动 ${team} 团队`)
+    }
+  }
   console.log('')
 }
 
