@@ -152,9 +152,13 @@ function generateTeamScripts(projectRoot: string, teams: string[]) {
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
   let changed = false
 
-  // 移除旧的无效团队脚本
+  // 移除旧的无效团队脚本（含带 team: 前缀的旧格式）
+  const oldTeamPrefix = 'team:'
+  const teamKeys = new Set(teams.map(t => t.replace('-coordinator', '')))
   for (const key of Object.keys(pkg.scripts)) {
-    if (!key.startsWith('team:')) continue
+    const isOldFormat = key.startsWith(oldTeamPrefix)
+    const isTeamKey = teamKeys.has(key)
+    if (!isOldFormat && !isTeamKey) continue
     const agentName = pkg.scripts[key]
     const isValid = teams.some(team => {
       const expected = `bun run scripts/dev.ts --agent ${team}`
@@ -169,9 +173,8 @@ function generateTeamScripts(projectRoot: string, teams: string[]) {
   // 添加新的团队脚本
   for (const team of teams) {
     const scriptName = team.replace('-coordinator', '')
-    const scriptKey = `team:${scriptName}`
-    if (pkg.scripts[scriptKey] !== undefined) continue
-    pkg.scripts[scriptKey] = `bun run scripts/dev.ts --agent ${team}`
+    if (pkg.scripts[scriptName] !== undefined) continue
+    pkg.scripts[scriptName] = `bun run scripts/dev.ts --agent ${team}`
     changed = true
   }
 
@@ -312,7 +315,7 @@ async function main() {
     console.log('  团队快捷入口:')
     for (const team of teams) {
       const key = team.replace('-coordinator', '')
-      console.log(`    bun run team:${key.padEnd(16)}启动 ${team} 团队`)
+      console.log(`    bun run ${key.padEnd(16)}启动 ${team} 团队`)
     }
   }
   console.log('')
