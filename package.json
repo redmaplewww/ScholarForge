@@ -15,8 +15,7 @@
     "repair": "bun run scripts/auto-repair.ts",
     "loop": "bun run scripts/repair-loop.ts",
     "summarize-error": "bun run scripts/error-summary.ts",
-    "maintain-knowledge": "bun run scripts/knowledge-maintenance.ts",
-    "team:simulink": "bun run scripts/dev.ts --agent simulink-coordinator"
+    "maintain-knowledge": "bun run scripts/knowledge-maintenance.ts"
   },
   "workspaces": [
     "packages/*",
