@@ -213,30 +213,6 @@ bun run self-evolve:audit
 bun run self-evolve:audit -- --approve-sandbox --materialize-copies
 ```
 
-### 8. 运行时能力同步
-
-ScholarForge 的启动脚本会同步 CLI-self 当前的默认 feature flags，例如：
-
-- `COORDINATOR_MODE`
-- `AGENT_TEAMS`
-- `FORK_SUBAGENT`
-- `TOKEN_BUDGET`
-- `KAIROS`
-- `DAEMON`
-- `BG_SESSIONS`
-- `ACP`
-- `LAN_PIPES`
-- `WORKFLOW_SCRIPTS`
-- `CHICAGO_MCP`
-
-可选能力可以通过环境变量开启：
-
-```bash
-FEATURE_MCP_SKILLS=1 bun run chat
-FEATURE_TEAMMEM=1 bun run chat
-FEATURE_WEB_BROWSER_TOOL=1 bun run chat
-```
-
 ## 快速开始
 
 ```bash
@@ -295,15 +271,6 @@ ScholarForge/
 - `.project/setup-config.json`
 - `.project/runs/`
 - `bun.lock`
-
-## 发布版约束
-
-- 不预设任何具体学科或行业团队
-- 不提交领域专用 Agent
-- 不提交本地 setup 配置
-- `bun run chat` 必须固定进入 `domain-coordinator`
-- 具体团队必须通过 `agents/<team>-coordinator.md` 生成 `bun run <team>`
-- 自优化只能生成 proposal，不能自动改生产行为
 
 ## 验证
 
