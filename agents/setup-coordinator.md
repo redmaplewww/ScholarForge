@@ -40,7 +40,7 @@ Your job is to:
 ## Configuration areas
 
 ### 1. Domain identity
-- Domain name (e.g., "LAMMPS molecular dynamics", "financial analysis")
+- Domain name (e.g., "financial analysis", "data pipeline", "document review")
 - Specialist agent names and roles
 - Domain terminology glossary
 

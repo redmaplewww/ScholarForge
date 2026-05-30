@@ -67,7 +67,10 @@ function mergeDeps(projectRoot: string, hostRoot: string) {
 
   let changed = false
 
-  if (!ourPkg.workspaces && hostPkg.workspaces) {
+  if (
+    (!ourPkg.workspaces || ourPkg.workspaces.length === 0) &&
+    hostPkg.workspaces
+  ) {
     ourPkg.workspaces = hostPkg.workspaces
     changed = true
   }
@@ -147,6 +150,11 @@ function syncAgents(projectRoot: string) {
 }
 
 function syncGenericDocs(projectRoot: string, hostRoot: string) {
+  if (process.env.GENERIC_AGENT_SYNC_UPSTREAM_DOCS !== '1') {
+    console.log('  [skip] docs/ 保持发布版精简文档')
+    return
+  }
+
   const docsDir = resolve(projectRoot, 'docs')
   mkdirSync(docsDir, { recursive: true })
   const files = [
@@ -377,18 +385,26 @@ async function main() {
   console.log('')
 
   console.log('  [5/6] 安装依赖 (bun install)...')
-  console.log('  注意: 这一步需要几分钟，会从网络下载依赖')
-  console.log('')
-  const installProc = Bun.spawn(['bun', 'install'], {
-    cwd: projectRoot,
-    stdio: ['inherit', 'inherit', 'inherit'],
-    env: process.env,
-  })
-  const installCode = await installProc.exited
-  if (installCode !== 0) {
-    console.error('  [X] bun install 失败')
-    console.error('  请检查网络连接，然后手动运行: bun install')
-    process.exit(1)
+  if (process.env.GENERIC_AGENT_SKIP_INSTALL === '1') {
+    console.log('  [skip] GENERIC_AGENT_SKIP_INSTALL=1，跳过依赖安装')
+  } else {
+    console.log('  注意: 这一步需要几分钟，会从网络下载依赖')
+    console.log('')
+    const installProc = Bun.spawn(['bun', 'install'], {
+      cwd: projectRoot,
+      stdio: ['inherit', 'inherit', 'inherit'],
+      env: process.env,
+    })
+    const installCode = await installProc.exited
+    if (installCode !== 0) {
+      console.error('  [X] bun install 失败')
+      console.error('  请检查网络连接，然后手动运行: bun install')
+      console.error('  若只需刷新团队入口，可运行:')
+      console.error(
+        '      GENERIC_AGENT_SKIP_INSTALL=1 bun run scripts/init-runtime.ts',
+      )
+      process.exit(1)
+    }
   }
   console.log('')
 

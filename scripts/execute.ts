@@ -234,7 +234,7 @@ export async function main() {
   const executableAvailable = await canExecute(executable, workdir)
   const effectiveDryRun =
     args.dryRun === true || !executableAvailable || resolved.argv.length === 0
-  // DOMAIN: customize the input flag (e.g. '-in' for LAMMPS, '-i' for other tools)
+  // DOMAIN: customize the input flag (for example '-i' or '--input')
   const commandArgs = effectiveDryRun
     ? []
     : [...resolved.argv.slice(1), '-in', inputPath, resolved.logFlag, logPath]
