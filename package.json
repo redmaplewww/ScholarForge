@@ -1,7 +1,7 @@
 {
-  "name": "generic-agent",
+  "name": "scholarforge",
   "version": "1.0.0",
-  "description": "Generic Agent Framework - Independent Runtime",
+  "description": "ScholarForge - 通用学研 Agent 团队框架",
   "type": "module",
   "scripts": {
     "init-runtime": "bun run scripts/init-runtime.ts",
