@@ -62,6 +62,9 @@ Example: `agents/finance-coordinator.md` creates `bun run finance`.
 | `bun run <team>` | Starts `<team>-coordinator` after `init-runtime` detects it. |
 | `bun run init-runtime` | Copies runtime from CLI-self, syncs agents/docs, regenerates scripts. |
 | `bun run self-evolve:audit` | Generates advisory self-evolution reports and proposals. |
+| `bun run evidence:add` | Registers an evidence source into `.project/evidence.json`. |
+| `bun run evidence:list` | Lists registered evidence. |
+| `bun run evidence:check` | Validates evidence IDs/source existence before review gates. |
 
 `init-runtime` also removes stale `team:*` scripts and obsolete generated team
 scripts whose coordinator files no longer exist.

@@ -23,6 +23,7 @@ memory alone. Use this template for domain-specific handoffs.
   },
   "assumptions": [],
   "risks": [],
+  "evidence_ids": [],
   "issues": [],
   "next_recommended_actor": "DOMAIN_AGENT_OR_COORDINATOR",
   "metadata": {

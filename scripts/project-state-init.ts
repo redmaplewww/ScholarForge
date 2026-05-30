@@ -23,6 +23,13 @@ async function main() {
     ['review-log.md', '.project/templates/review-log.md'],
     ['open-issues.md', '.project/templates/open-issues.md'],
     ['decisions.md', '.project/templates/decisions.md'],
+    ['state.json', '.project/templates/state.json'],
+    ['workflow-state.json', '.project/templates/workflow-state.json'],
+    ['evidence.json', '.project/templates/evidence.json'],
+    [
+      'self-evolution-state.json',
+      '.project/templates/self-evolution-state.json',
+    ],
   ] as const
 
   await mkdir(targetDir, { recursive: true })

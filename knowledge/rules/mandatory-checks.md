@@ -14,6 +14,10 @@ All non-trivial technical decisions must cite at least one of:
 
 Uncited high-impact decisions trigger `REVISE`.
 
+If `.project/evidence.json` exists, high-impact decisions should cite evidence
+IDs such as `EV-001`. Use `bun run evidence:check` to validate IDs and source
+existence before approving a review gate.
+
 ## MB-002: Handoff Completeness
 
 Every stage handoff must include:

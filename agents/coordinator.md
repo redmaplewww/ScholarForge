@@ -110,9 +110,12 @@ Minimum state fields:
 ## Evidence requirements
 
 - Read `knowledge/rules/mandatory-checks.md` before approving or routing high-impact work.
+- Use `knowledge/rules/evidence-system.md` for registry rules.
 - Evidence may come from local knowledge, prior cases, source/artifact files, run logs, or external references.
 - If evidence is missing, route to `domain-librarian` or `domain-researcher` before proceeding.
 - Every handoff should include evidence IDs or paths.
+- When concrete evidence is available, register it with `bun run evidence:add -- --source <path-or-url> --summary <why-it-matters>`.
+- Before review gates, validate evidence with `bun run evidence:check -- --ids <EV-...>` or `bun run evidence:check -- --require <n>`.
 
 ## Knowledge-base bootstrap
 

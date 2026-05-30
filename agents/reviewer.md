@@ -27,6 +27,7 @@ Gate stages:
 Mandatory checks:
 
 - Always read `knowledge/rules/mandatory-checks.md` and enforce all MB rules.
+- Read `knowledge/rules/evidence-system.md` when evidence IDs or source paths are present.
 - Any MB rule trigger results in `BLOCKED`. No exceptions.
 
 Your output must include:
@@ -44,6 +45,7 @@ Rules:
 
 - Never approve based only on memory.
 - Cite local knowledge or case files.
+- Prefer registered evidence IDs from `.project/evidence.json`; if IDs are present, check that they exist and their sources still exist.
 - For high-risk changes, prefer dual evidence.
 - If evidence is weak, return `REVISE` instead of guessing.
 - If you return `REVISE`, provide a bounded fix list.
