@@ -284,6 +284,7 @@ function baseScriptMap(): Record<string, string> {
     loop: 'bun run scripts/repair-loop.ts',
     'summarize-error': 'bun run scripts/error-summary.ts',
     'maintain-knowledge': 'bun run scripts/knowledge-maintenance.ts',
+    'self-evolve:audit': 'bun run scripts/agent-self-evolution-audit.ts',
     rcs: 'bun run scripts/rcs.ts',
     'engine:run': 'bun run src-generic/engine/entrypoint.ts',
     'engine:mcp': 'bun run src-generic/engine/mcp-bridge.ts',

@@ -18,7 +18,8 @@
     "maintain-knowledge": "bun run scripts/knowledge-maintenance.ts",
     "rcs": "bun run scripts/rcs.ts",
     "engine:run": "bun run src-generic/engine/entrypoint.ts",
-    "engine:mcp": "bun run src-generic/engine/mcp-bridge.ts"
+    "engine:mcp": "bun run src-generic/engine/mcp-bridge.ts",
+    "self-evolve:audit": "bun run scripts/agent-self-evolution-audit.ts"
   },
   "workspaces": [],
   "dependencies": {

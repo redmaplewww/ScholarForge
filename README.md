@@ -61,6 +61,7 @@ Example: `agents/finance-coordinator.md` creates `bun run finance`.
 | `bun run setup` | Runs the Chinese setup wizard and writes `.project/setup-config.json`. |
 | `bun run <team>` | Starts `<team>-coordinator` after `init-runtime` detects it. |
 | `bun run init-runtime` | Copies runtime from CLI-self, syncs agents/docs, regenerates scripts. |
+| `bun run self-evolve:audit` | Generates advisory self-evolution reports and proposals. |
 
 `init-runtime` also removes stale `team:*` scripts and obsolete generated team
 scripts whose coordinator files no longer exist.
@@ -146,6 +147,40 @@ FEATURE_WEB_BROWSER_TOOL=1 bun run chat
 ```
 
 See `docs/features/README.md` for the feature index.
+
+## Safety-Gated Self-Evolution
+
+The template includes an advisory self-optimization loop. Its purpose is to
+identify inefficient stages, repeated error patterns, missing evidence, and
+high-revision agents, then propose improvements safely.
+
+Run an audit:
+
+```bash
+bun run self-evolve:audit
+```
+
+Outputs:
+
+- `project-memory/agent-evolution-report.md`
+- `agent-improvement-proposals/<run-id>/signals.json`
+- `agent-improvement-proposals/<run-id>/proposals.json`
+- `agent-improvement-proposals/<run-id>/proposals.md`
+
+The audit is read-only for production behavior. It never edits active agents,
+rules, feature flags, or runtime files.
+
+After the user approves sandbox testing, run:
+
+```bash
+bun run self-evolve:audit -- --approve-sandbox --materialize-copies
+```
+
+Sandbox mode creates candidate copies and a sandbox manifest under the proposal
+directory. Apply is allowed only after the sandbox uses the cases where the
+errors were discovered and shows clear metric improvement with no regression.
+Applying a proposal requires a second explicit user instruction naming the
+proposal ID.
 
 ## Release Template Rules
 

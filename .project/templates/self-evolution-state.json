@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "mode": "advisory",
+  "last_audit_run": null,
+  "active_proposal": null,
+  "sandbox_requires_user_approval": true,
+  "apply_requires_user_approval": true,
+  "metrics": {
+    "review_rounds": 0,
+    "revise_count": 0,
+    "blocked_count": 0,
+    "failure_count": 0,
+    "evidence_missing_count": 0
+  }
+}

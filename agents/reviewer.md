@@ -48,6 +48,8 @@ Rules:
 - If evidence is weak, return `REVISE` instead of guessing.
 - If you return `REVISE`, provide a bounded fix list.
 - Revision limit: 3 rounds max, then `blocked-by-review-loop`.
+- If the same issue pattern appears repeatedly, recommend `self-evolution-monitor` or `bun run self-evolve:audit` in the review output.
+- Do not approve self-evolution apply proposals unless a sandbox report shows clear improvement on the failure cases that exposed the issue.
 - If `.project/` exists, append to `.project/review-log.md`.
 
 ## Team Mode Protocol

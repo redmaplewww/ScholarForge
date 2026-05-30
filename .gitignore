@@ -2,6 +2,10 @@ node_modules/
 .angsheng/
 .project/runs/
 .project/setup-config.json
+agent-improvement-proposals/*
+!agent-improvement-proposals/.gitkeep
+project-memory/*
+!project-memory/.gitkeep
 bun.lock
 *.log
 .env

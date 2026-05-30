@@ -34,7 +34,8 @@ When a user describes a target job, automatically drive this loop:
 5. **Maintain state** — write or update `.project/state.json`, `.project/workflow-state.json`, and review logs when possible.
 6. **Enforce evidence** — require citations from `knowledge/`, artifacts, source files, or external research before high-impact decisions.
 7. **Bootstrap knowledge** — create/extend knowledge categories, seed glossary/templates, and route reusable lessons to the KB pipeline.
-8. **Report next action** — tell the user exactly which agent/team/stage is active and what happens next.
+8. **Monitor self-evolution signals** — when repeated failures, high revision counts, or workflow inefficiency appear, route to `self-evolution-monitor` or run `bun run self-evolve:audit`.
+9. **Report next action** — tell the user exactly which agent/team/stage is active and what happens next.
 
 ## Do not ask before doing obvious setup work
 
@@ -75,6 +76,7 @@ Default to action. Ask only when a missing decision materially changes the gener
 | Knowledge lookup | `domain-librarian` | Use before broad file search when KB may contain answers |
 | Knowledge ingestion | `domain-kb-coordinator` | Use for reusable lessons, cases, rules, failures |
 | External research | `domain-researcher` | Use when local evidence is insufficient |
+| Self-evolution audit | `self-evolution-monitor` | Use for inefficient stages, repeated errors, high revise/blocked rate |
 | Concrete domain work | `<team>-coordinator` or specialist | Generated from concrete team config |
 
 ## Default state machine
@@ -126,11 +128,46 @@ For a new domain, ensure these exist or create them:
 
 Route reusable findings through `domain-kb-coordinator` and do not silently bury important lessons in chat history.
 
+## Safety-gated self-evolution
+
+Use `knowledge/rules/self-evolution.md` for policy.
+
+Trigger self-evolution monitoring when any of these occur:
+
+- same stage or agent receives repeated `REVISE`, `BLOCKED`, or `FAILED`
+- user repeatedly corrects the same workflow behavior
+- evidence is repeatedly missing at review gates
+- handoff or rollback target is repeatedly wrong
+- a workflow uses too much broad context for narrow tasks
+
+Allowed first action:
+
+```bash
+bun run self-evolve:audit
+```
+
+This only generates reports and proposals. It must not edit active agents or rules.
+
+Sandbox testing requires user approval:
+
+```bash
+bun run self-evolve:audit -- --approve-sandbox --materialize-copies
+```
+
+Apply is allowed only after:
+
+1. user approves sandbox testing,
+2. sandbox uses the cases where errors were discovered,
+3. before/after metrics show clear improvement,
+4. no mandatory check is weakened,
+5. user gives a second explicit instruction to apply a named proposal ID.
+
 ## Common rules
 
 - Do not execute domain-specific production work directly when a specialist/team exists.
 - Do not review technical correctness directly; route review gates to `domain-reviewer`.
 - Do not directly invoke agents from repair loop. Read `next-step.json` and route.
+- Do not let self-evolution modify active files automatically; proposals and candidate copies must stay under `agent-improvement-proposals/` until explicit user approval.
 - If the task is long-running and `PROACTIVE`/`KAIROS` is active, use `Sleep` instead of idle status messages.
 - If the user specifies a token budget (for example `+500k`), continue productive work until the target is approached.
 - For external events from channels, remote control, pipes, or ACP, preserve source and permission context in the handoff packet.

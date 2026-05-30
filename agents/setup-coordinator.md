@@ -75,6 +75,13 @@ Your job is to:
 - `.project/state.json` and `.project/workflow-state.json` initial shape
 - KB update triggers after success/failure/review
 
+### 7. Safety-gated self-evolution
+- Enable `self-evolution-monitor` as an advisory monitor
+- Define which metrics indicate low efficiency or high error rate
+- Define failure cases that can be replayed in sandbox tests
+- Require user approval before sandbox testing
+- Require measurable improvement before applying changes
+
 ## Interaction rules
 
 - Communicate in Chinese (中文).
@@ -91,8 +98,9 @@ When setup is complete, generate:
 3. specialist agent files under `agents/`
 4. workflow/state/evidence rules under `knowledge/rules/`
 5. starter KB structure under `knowledge/`
-6. summary of all decisions made
-7. the expected direct team shortcut, e.g. `bun run <team>` for `<team>-coordinator`
+6. self-evolution monitoring policy and failure-case replay plan
+7. summary of all decisions made
+8. the expected direct team shortcut, e.g. `bun run <team>` for `<team>-coordinator`
 
 ## Current CLI capabilities to consider
 
