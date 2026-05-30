@@ -7,11 +7,12 @@
  * 1. 定位 CLI-self
  * 2. 复制 src/ -> 本地 src/（如本地 src/ 已存在则跳过）
  * 3. 复制 packages/ -> 本地 packages/
- * 4. 复制 node_modules/ -> 本地 node_modules/
- * 5. 复制 tsconfig.json, tsconfig.base.json 等构建配置
- * 6. 合并依赖到 package.json（不覆盖脚本）
+ * 4. 复制 tsconfig.json, tsconfig.base.json 等构建配置
+ * 5. 合并依赖到 package.json（不覆盖脚本）
+ * 6. 安装依赖
  * 7. 同步 agents/ -> .angsheng/agents/
- * 8. 完成，可删除 CLI-self 后仍能运行
+ * 8. 扫描具体团队 coordinator 并生成 `bun run <team>` 入口
+ * 9. 完成，可删除 CLI-self 后仍能运行
  */
 import {
   existsSync,
@@ -87,11 +88,38 @@ function mergeDeps(projectRoot: string, hostRoot: string) {
     changed = true
   }
 
+  for (const depName of Object.keys(ourPkg.dependencies || {})) {
+    if (ourPkg.devDependencies?.[depName] !== undefined) {
+      delete ourPkg.devDependencies[depName]
+      changed = true
+    }
+  }
+
   if (changed) {
     writeFileSync(ourPkgPath, JSON.stringify(ourPkg, null, 2))
     console.log('  [OK]   package.json 依赖已合并（脚本保留不变）')
   } else {
     console.log('  [skip] package.json 无需更新')
+  }
+}
+
+function ensureBaseScripts(projectRoot: string) {
+  const pkgPath = resolve(projectRoot, 'package.json')
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+  pkg.scripts ||= {}
+
+  const requiredScripts = baseScriptMap()
+
+  let changed = false
+  for (const [key, value] of Object.entries(requiredScripts)) {
+    if (pkg.scripts[key] === value) continue
+    pkg.scripts[key] = value
+    changed = true
+  }
+
+  if (changed) {
+    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
+    console.log('  [OK]   package.json 基础脚本已同步')
   }
 }
 
@@ -116,6 +144,40 @@ function syncAgents(projectRoot: string) {
     }
   }
   console.log(`  [OK]   .angsheng/agents/ (${n} 个已更新)`)
+}
+
+function syncGenericDocs(projectRoot: string, hostRoot: string) {
+  const docsDir = resolve(projectRoot, 'docs')
+  mkdirSync(docsDir, { recursive: true })
+  const files = [
+    'agent-workflow-overview.md',
+    'features/all-features-guide.md',
+    'features/coordinator-mode.md',
+    'features/fork-subagent.md',
+    'features/proactive.md',
+    'features/token-budget.md',
+    'features/workflow-scripts.md',
+    'features/daemon.md',
+    'features/channels.md',
+    'features/web-search-tool.md',
+    'features/web-browser-tool.md',
+    'features/mcp-skills.md',
+    'features/acp-link.md',
+    'features/context-collapse.md',
+    'features/computer-use-tools-reference.md',
+    'features/teammem.md',
+  ]
+
+  let n = 0
+  for (const rel of files) {
+    const src = resolve(hostRoot, 'docs', rel)
+    if (!existsSync(src)) continue
+    const dst = resolve(docsDir, rel)
+    mkdirSync(resolve(dst, '..'), { recursive: true })
+    copyFileSync(src, dst)
+    n++
+  }
+  console.log(`  [OK]   docs/ 已同步 ${n} 个 CLI 功能文档`)
 }
 
 function detectTeamCoordinators(projectRoot: string): string[] {
@@ -154,16 +216,24 @@ function generateTeamScripts(projectRoot: string, teams: string[]) {
 
   // 移除旧的无效团队脚本（含带 team: 前缀的旧格式）
   const oldTeamPrefix = 'team:'
+  const reserved = new Set(Object.keys(baseScriptMap()))
   const teamKeys = new Set(teams.map(t => t.replace('-coordinator', '')))
+  const teamCommands = new Set(
+    teams.map(team => `bun run scripts/dev.ts --agent ${team}`),
+  )
   for (const key of Object.keys(pkg.scripts)) {
     const isOldFormat = key.startsWith(oldTeamPrefix)
     const isTeamKey = teamKeys.has(key)
-    if (!isOldFormat && !isTeamKey) continue
+    const looksGeneratedTeamCommand =
+      typeof pkg.scripts[key] === 'string' &&
+      /^bun run scripts\/dev\.ts --agent .+-coordinator$/.test(
+        pkg.scripts[key],
+      ) &&
+      key !== 'chat' &&
+      key !== 'chat:setup'
+    if (!isOldFormat && !isTeamKey && !looksGeneratedTeamCommand) continue
     const agentName = pkg.scripts[key]
-    const isValid = teams.some(team => {
-      const expected = `bun run scripts/dev.ts --agent ${team}`
-      return agentName === expected
-    })
+    const isValid = teamCommands.has(agentName)
     if (!isValid) {
       delete pkg.scripts[key]
       changed = true
@@ -173,6 +243,12 @@ function generateTeamScripts(projectRoot: string, teams: string[]) {
   // 添加新的团队脚本
   for (const team of teams) {
     const scriptName = team.replace('-coordinator', '')
+    if (reserved.has(scriptName)) {
+      console.warn(
+        `  [!]   跳过团队入口 ${scriptName}: 与内置脚本重名，请重命名 ${team}`,
+      )
+      continue
+    }
     if (pkg.scripts[scriptName] !== undefined) continue
     pkg.scripts[scriptName] = `bun run scripts/dev.ts --agent ${team}`
     changed = true
@@ -183,6 +259,26 @@ function generateTeamScripts(projectRoot: string, teams: string[]) {
     console.log(`  [OK]   package.json 团队脚本已更新`)
   } else {
     console.log('  [skip] package.json 团队脚本无需更新')
+  }
+}
+
+function baseScriptMap(): Record<string, string> {
+  return {
+    'init-runtime': 'bun run scripts/init-runtime.ts',
+    chat: 'bun run scripts/dev.ts',
+    'chat:setup': 'bun run scripts/dev.ts --agent setup-coordinator',
+    setup: 'bun run scripts/setup-wizard.ts',
+    'setup:ai': 'bun run scripts/setup-wizard.ts --ai',
+    'init-state': 'bun run scripts/project-state-init.ts',
+    lookup: 'bun run scripts/lookup.ts',
+    execute: 'bun run scripts/execute.ts',
+    repair: 'bun run scripts/auto-repair.ts',
+    loop: 'bun run scripts/repair-loop.ts',
+    'summarize-error': 'bun run scripts/error-summary.ts',
+    'maintain-knowledge': 'bun run scripts/knowledge-maintenance.ts',
+    rcs: 'bun run scripts/rcs.ts',
+    'engine:run': 'bun run src-generic/engine/entrypoint.ts',
+    'engine:mcp': 'bun run src-generic/engine/mcp-bridge.ts',
   }
 }
 
@@ -264,11 +360,20 @@ async function main() {
       copyFileSync(src, resolve(projectRoot, f))
     }
   }
+  const runtimeScripts = ['rcs.ts']
+  for (const f of runtimeScripts) {
+    const src = resolve(hostRoot, 'scripts', f)
+    if (existsSync(src)) {
+      mkdirSync(resolve(projectRoot, 'scripts'), { recursive: true })
+      copyFileSync(src, resolve(projectRoot, 'scripts', f))
+    }
+  }
   console.log('  [OK]   构建配置已复制')
   console.log('')
 
   console.log('  [4/6] 合并依赖到 package.json...')
   mergeDeps(projectRoot, hostRoot)
+  ensureBaseScripts(projectRoot)
   console.log('')
 
   console.log('  [5/6] 安装依赖 (bun install)...')
@@ -289,13 +394,12 @@ async function main() {
 
   console.log('  [6/6] 同步 Agent 定义 & 项目文件...')
   syncAgents(projectRoot)
+  syncGenericDocs(projectRoot, hostRoot)
   mkdirSync(resolve(projectRoot, '.project', 'runs'), { recursive: true })
   createAngshengMd(projectRoot)
 
   const teams = detectTeamCoordinators(projectRoot)
-  if (teams.length > 0) {
-    generateTeamScripts(projectRoot, teams)
-  }
+  generateTeamScripts(projectRoot, teams)
   console.log('')
 
   console.log('  ============================================================')

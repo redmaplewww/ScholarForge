@@ -400,10 +400,12 @@ function showNextSteps() {
   bullet('2. 添加初始知识内容: knowledge/ 目录')
   bullet('3. 运行知识库维护: bun run maintain-knowledge')
   bullet('4. 初始化项目状态: bun run init-state')
-  bullet('5. 启动 CLI: bun run src/cli.ts\n')
+  bullet('5. 刷新运行时和团队快捷入口: bun run init-runtime')
+  bullet('6. 启动通用入口: bun run chat')
+  bullet('7. 如果生成了 <team>-coordinator.md，可直接运行: bun run <team>\n')
 
   info('或者让 AI 进一步完善配置：')
-  bullet('  bun run src/cli.ts --agent setup-coordinator\n')
+  bullet('  bun run chat:setup\n')
 }
 
 export async function main() {
@@ -534,9 +536,10 @@ async function runAiMode() {
   success('配置已保存到 .project/setup-config.json')
 
   info('\n后续步骤：')
-  bullet('1. 在宿主 CLI 中运行: --agent setup-coordinator')
+  bullet('1. 运行: bun run chat:setup')
   bullet('2. AI 会读取 .project/setup-config.json 完成精细配置')
-  bullet('3. 或者重新运行 bun run setup 选择"交互式引导"\n')
+  bullet('3. 完成具体 coordinator 后运行: bun run init-runtime')
+  bullet('4. 之后可用 bun run <team> 直接进入对应团队\n')
 
   await pause()
 }

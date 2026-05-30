@@ -4,7 +4,7 @@
 // 复用宿主 CLI 的 cli.tsx 入口，但以 generic-agent 为工作目录
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { getMacroDefines, DEFAULT_BUILD_FEATURES } from './defines.ts'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -22,12 +22,10 @@ if (!existsSync(cliPath)) {
 }
 
 function resolveAgentName(args: string[]): string {
-  // 如果手动传了 --agent，优先使用
   const agentIdx = args.indexOf('--agent')
   if (agentIdx !== -1 && args[agentIdx + 1]) {
     return args[agentIdx + 1]
   }
-  // 默认始终启动 domain-coordinator
   return 'domain-coordinator'
 }
 
@@ -50,6 +48,7 @@ const inspectArgs = process.env.BUN_INSPECT
 
 const rawArgs = process.argv.slice(2)
 const agentName = resolveAgentName(rawArgs)
+console.log(`  [启动] Agent: ${agentName}`)
 const cleanArgs = rawArgs.filter((a, i) => {
   if (a === '--agent') return false
   if (i > 0 && rawArgs[i - 1] === '--agent') return false

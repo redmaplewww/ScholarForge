@@ -1,60 +1,58 @@
-# Mandatory Checks — Simulink仿真
+# Mandatory Checks
 
-## MC-101 ~ MC-120: 需求分析审查 (Stage 1)
+These checks are intentionally domain-neutral. Concrete teams should add
+`DOMAIN_MC_...` checks for technical correctness, safety, and acceptance criteria.
 
-- MC-101: 仿真目标是否明确量化
-- MC-102: 物理模型是否指定(状态方程/传递函数)
-- MC-103: 关键参数是否列出(含数值、单位、来源)
-- MC-104: 控制策略是否明确
-- MC-105: 仿真条件是否完整(时长/Solver/初始条件)
-- MC-106: 预期输出是否量化(性能指标含数值目标)
-- MC-107: 约束与假设是否列出
-- MC-108: 需求是否一致(无矛盾)
-- MC-109: 需求是否可仿真(技术可行性)
-- MC-110: 参数来源是否可信
+## MB-001: Evidence Citation
 
-## MC-201 ~ MC-220: 仿真设计审查 (Stage 2)
+All non-trivial technical decisions must cite at least one of:
 
-- MC-201: 系统架构是否与SSD一致
-- MC-202: 模块划分是否完整(无遗漏功能)
-- MC-203: 接口定义是否一致(信号维度/类型)
-- MC-204: 控制算法参数是否与SSD匹配
-- MC-205: Solver选型是否合理(基于系统特性)
-- MC-206: 步长设置是否满足精度要求
-- MC-207: 模块选型是否正确(Simulink库)
-- MC-208: 坐标变换是否正确(Clarke/Park)
-- MC-209: 是否考虑了离散化/采样时间
+- local knowledge under `knowledge/`
+- prior case or report files
+- source code or artifact paths
+- authoritative external references retrieved by a researcher
 
-## MC-301 ~ MC-320: 代码审查 (Stage 3)
+Uncited high-impact decisions trigger `REVISE`.
 
-- MC-301: 代码是否与SDD一致
-- MC-302: 电机参数是否与SSD一致
-- MC-303: FOC控制逻辑是否正确(id=0, iq控制)
-- MC-304: SVPWM实现是否正确(扇区/时间计算)
-- MC-305: Fuzzy-PID规则表是否完整(49条/输出)
-- MC-306: 模型连接是否完整(无断线)
-- MC-307: 注释是否充分(中文)
-- MC-308: 文件是否完整(.slx/.m/.fis)
-- MC-309: 参数是否从params.m加载(非硬编码)
-- MC-310: 是否可复现(独立运行无依赖)
+## MB-002: Handoff Completeness
 
-## MC-401 ~ MC-410: 执行审查 (Stage 4)
+Every stage handoff must include:
 
-- MC-401: 仿真是否成功完成
-- MC-402: 输出数据是否在物理合理范围
-- MC-403: 是否有NaN/Inf
-- MC-404: 收敛是否正常(无警告)
-- MC-405: 执行时间是否合理
+- stage id and status
+- producer agent
+- artifact paths or a reason no artifact exists
+- assumptions and known risks
+- next recommended actor
 
-## MC-501 ~ MC-510: 报告审查 (Stage 5)
+Missing required handoff fields trigger `REVISE`.
 
-- MC-501: 报告是否包含所有性能指标
-- MC-502: 指标是否与SSD目标逐一对比
-- MC-503: 图表是否标注完整(轴/单位)
-- MC-504: 结论是否有数据支撑
-- MC-505: 建议是否可操作
+## MB-003: Review Gate Integrity
 
-## MB-001: 证据引用
+If a stage declares a review gate, advancement requires a reviewer decision:
 
-所有技术决策必须引用本地知识、案例文件或权威参考文献。
-无证据的决策触发 REVISE。
+- `PASS`: advance
+- `REVISE`: return to producer with bounded fixes
+- `BLOCKED`: stop and ask for user or coordinator decision
+
+Skipping a required review gate triggers `BLOCKED`.
+
+## MB-004: Bounded Repair
+
+Repair loops must declare:
+
+- maximum revision count (default: 3)
+- rollback target
+- responsible actor
+- stop condition
+
+Unbounded repair loops trigger `BLOCKED`.
+
+## MB-005: Secret And Safety Hygiene
+
+Do not commit or transmit secrets, credentials, `.env` values, private keys, or
+tokens. If a workflow uses team memory, channels, remote control, or MCP tools,
+verify that sensitive files are excluded or explicitly approved.
+
+## Domain Check Placeholder
+
+<!-- DOMAIN: add concrete mandatory checks such as DOMAIN_MC_101 here. -->

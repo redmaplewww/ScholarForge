@@ -1,41 +1,52 @@
-# Workflow Stages — Simulink仿真
+# Workflow Stages
 
-## Stage 1: 需求分析
+This file is the domain-neutral workflow template. Replace `DOMAIN_...` values and
+`<!-- DOMAIN: -->` blocks when creating a concrete team.
 
-- **Description**: 接收用户仿真需求，生成仿真规格文档(SSD)
-- **Input**: 用户自然语言描述
-- **Output**: SSD (Simulation Specification Document)
-- **Review gate**: Yes (MC-101 ~ MC-120)
-- **Agent**: requirement-analyst
+## Stage Template
 
-## Stage 2: 仿真设计
+Each stage should define:
 
-- **Description**: 根据SSD设计仿真方案，生成仿真设计文档(SDD)
-- **Input**: SSD
-- **Output**: SDD (Simulation Design Document)
-- **Review gate**: Yes (MC-201 ~ MC-220)
-- **Agent**: simulink-designer
+- **Stage ID**: `DOMAIN_STAGE_XX`
+- **Description**: what this stage produces or validates
+- **Input**: required handoff packet and artifacts
+- **Output**: reviewable artifacts with paths
+- **Primary agent**: `DOMAIN_<role>-agent`
+- **Review gate**: `yes | no`
+- **Reviewer**: `DOMAIN_reviewer` when a gate is required
 
-## Stage 3: 代码编写
+## Recommended Generic Pipeline
 
-- **Description**: 根据SDD生成可运行的MATLAB/Simulink代码(.slx, .m, .fis)
-- **Input**: SDD
-- **Output**: 完整代码文件集
-- **Review gate**: Yes (MC-301 ~ MC-320)
-- **Agent**: code-engineer
+1. **DOMAIN_STAGE_01: Intake / requirement capture**
+   - Input: user request, relevant files, constraints
+   - Output: scoped task brief and assumptions
+   - Review gate: optional
 
-## Stage 4: 仿真运行
+2. **DOMAIN_STAGE_02: Design / plan**
+   - Input: approved task brief
+   - Output: implementation or execution plan
+   - Review gate: yes for high-risk workflows
 
-- **Description**: 执行仿真，监控收敛，诊断错误
-- **Input**: 代码文件集
-- **Output**: 仿真结果数据
-- **Review gate**: Yes (MC-401 ~ MC-410)
-- **Agent**: execution-agent
+3. **DOMAIN_STAGE_03: Production / execution**
+   - Input: approved plan
+   - Output: domain artifact, code, analysis, or run metadata
+   - Review gate: yes for irreversible, expensive, or technical changes
 
-## Stage 5: 后处理分析
+4. **DOMAIN_STAGE_04: Verification / analysis**
+   - Input: produced artifacts and run outputs
+   - Output: pass/fail assessment, metrics, issues
+   - Review gate: optional
 
-- **Description**: 数据可视化，性能指标计算，仿真报告
-- **Input**: 仿真结果数据
-- **Output**: 仿真分析报告
-- **Review gate**: Yes (MC-501 ~ MC-510)
-- **Agent**: postprocessor
+5. **DOMAIN_STAGE_05: Reporting / handoff**
+   - Input: verified result
+   - Output: final report, reusable lessons, next-step recommendation
+   - Review gate: no by default
+
+## Mode Notes
+
+- In normal `bun run chat`, the generic `domain-coordinator` remains the main entry.
+- Concrete teams should provide `<team>-coordinator.md` in `agents/`.
+- `bun run init-runtime` scans concrete coordinators and creates direct `bun run <team>` entries.
+- Team entries do not depend on `.project/setup-config.json`.
+
+<!-- DOMAIN: replace this section with concrete stage definitions. -->
