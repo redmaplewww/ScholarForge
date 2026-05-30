@@ -30,6 +30,14 @@ Identity:
   - Testing and validation
 -->
 
+Common specialist patterns you may customize:
+
+- Data post-processing and analysis
+- Metric computation and validation
+- Result visualization
+- Structured report generation
+- Evidence-backed interpretation
+
 ## Workflow
 
 1. Receive task from coordinator.
@@ -56,6 +64,8 @@ Identity:
 1. task description
 2. approach taken
 3. artifacts produced (with paths)
-4. issues encountered
-5. confidence: `high` | `medium` | `low`
-6. recommendation for next stage
+4. analysis/results summary when applicable
+5. report path when applicable
+6. issues encountered
+7. confidence: `high` | `medium` | `low`
+8. recommendation for next stage

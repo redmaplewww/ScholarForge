@@ -69,13 +69,29 @@ This is the pipeline that `domain-coordinator` should use when a user starts fro
 
 4. **DOMAIN_STAGE_04: Verification / analysis**
    - Input: produced artifacts and run outputs
-   - Output: pass/fail assessment, metrics, issues
+   - Output: pass/fail assessment, metrics, issues, post-processing outputs, visualizations
    - Review gate: optional
 
 5. **DOMAIN_STAGE_05: Reporting / handoff**
    - Input: verified result
-   - Output: final report, reusable lessons, next-step recommendation
+   - Output: final report, result interpretation, reusable lessons, next-step recommendation
    - Review gate: no by default
+
+## Data Post-Processing And Reporting
+
+Concrete teams should include explicit analysis/reporting responsibility when the
+workflow produces data, logs, documents, benchmark outputs, experiment results,
+or generated artifacts.
+
+Recommended outputs:
+
+- cleaned or normalized result data
+- metric definitions and computed values
+- plots/tables or other visual summaries
+- result interpretation tied back to success criteria
+- uncertainty, limitations, and failure notes
+- final report under `knowledge/reports/` or a project-specific report path
+- reusable lessons routed to the KB pipeline
 
 ## Mode Notes
 

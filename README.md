@@ -139,10 +139,31 @@ knowledge/
 知识库相关 Agent：
 
 - `domain-librarian`：检索本地知识、案例、报告和历史经验
-- `domain-researcher`：当本地证据不足时进行外部研究
+- `domain-researcher`：当本地证据不足时进行外部研究和论文检索
 - `domain-kb-coordinator`：管理入库流程
 - `domain-kb-curator`：提取、分类和整理知识条目
 - `domain-kb-reviewer`：审查知识质量
+
+论文检索说明：
+
+- `domain-researcher` 会优先检索 DOI 页面、出版社页面、arXiv/预印本、Semantic Scholar/OpenAlex/Crossref 等元数据源、机构仓储和作者主页。
+- 检索结果应包含题名、作者、年份、出处、DOI/URL、摘要或可访问内容摘要，以及与当前任务的关系。
+- AI 工具不能绕过反爬、验证码、机构登录或付费墙；遇到这些限制时会明确说明，并建议用户提供合法获取的 PDF、BibTeX 或引用导出文件。
+- 不应编造 DOI、页码、实验结果或论文结论。
+
+### 6. 数据后处理分析与结果报告
+
+对于会产生数据、日志、实验结果、代码输出、文档草稿或评测结果的任务，ScholarForge 建议团队显式配置后处理/分析/报告阶段。该阶段可以由专门的 specialist 负责，也可以由团队 coordinator 路由给已有分析 Agent。
+
+建议产出包括：
+
+- 清洗或归一化后的结果数据
+- 指标定义和计算结果
+- 图表、表格或可视化摘要
+- 与任务成功标准对应的结果解释
+- 不确定性、局限性和失败原因说明
+- 最终报告，推荐存放在 `knowledge/reports/` 或项目指定报告路径
+- 可复用经验，交给 `domain-kb-coordinator` 入库
 
 维护知识库：
 
@@ -150,7 +171,7 @@ knowledge/
 bun run maintain-knowledge
 ```
 
-### 6. Review Gate 与强制检查
+### 7. Review Gate 与强制检查
 
 `domain-reviewer` 负责阶段性质量门禁，输出：
 
@@ -169,7 +190,7 @@ bun run maintain-knowledge
 - 状态机可追踪性
 - 新领域知识库 bootstrap 完整性
 
-### 7. 安全门控自优化机制
+### 8. 安全门控自优化机制
 
 ScholarForge 包含一个自优化 Agent：
 
