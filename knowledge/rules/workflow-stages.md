@@ -15,7 +15,42 @@ Each stage should define:
 - **Review gate**: `yes | no`
 - **Reviewer**: `DOMAIN_reviewer` when a gate is required
 
-## Recommended Generic Pipeline
+## Default Auto-Configuration Pipeline
+
+This is the pipeline that `domain-coordinator` should use when a user starts from
+`bun run chat` and describes target work before a concrete team exists.
+
+1. **DISCOVERY: Target work diagnosis**
+   - Input: user request, files, constraints, target deliverables
+   - Output: domain brief, candidate team name, risk list, success criteria
+   - Primary agent: `domain-coordinator`
+   - Review gate: no
+
+2. **TEAM_DESIGN: Agent/workflow design**
+   - Input: domain brief
+   - Output: proposed coordinator, specialists, stages, review gates, KB taxonomy
+   - Primary agent: `setup-coordinator`
+   - Review gate: yes when the workflow is complex or high risk
+
+3. **TEAM_GENERATION: Template materialization**
+   - Input: approved team design
+   - Output: `agents/<team>-coordinator.md`, specialists, workflow/evidence/state rules
+   - Primary agent: `setup-coordinator`
+   - Review gate: optional
+
+4. **RUNTIME_REFRESH: Entry generation**
+   - Input: generated concrete coordinator
+   - Output: refreshed `.angsheng/agents/` and `bun run <team>` entry
+   - Primary command: `bun run init-runtime`
+   - Review gate: no
+
+5. **WORKFLOW_EXECUTION: Concrete team work**
+   - Input: user task and concrete team entry
+   - Output: domain artifacts, review packets, KB update candidates
+   - Primary agent: `<team>-coordinator`
+   - Review gate: as defined by concrete workflow
+
+## Recommended Concrete Team Pipeline
 
 1. **DOMAIN_STAGE_01: Intake / requirement capture**
    - Input: user request, relevant files, constraints

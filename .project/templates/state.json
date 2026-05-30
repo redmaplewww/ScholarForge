@@ -1,0 +1,13 @@
+{
+  "domain": "unknown",
+  "team": null,
+  "state": "UNCONFIGURED",
+  "active_stage": null,
+  "active_agent": "domain-coordinator",
+  "handoff_path": null,
+  "evidence_ids": [],
+  "review_status": null,
+  "kb_updates": [],
+  "next_action": "discover target work",
+  "updated_at": ""
+}

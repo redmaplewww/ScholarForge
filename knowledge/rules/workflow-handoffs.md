@@ -32,6 +32,37 @@ memory alone. Use this template for domain-specific handoffs.
 }
 ```
 
+## Auto-Configuration Handoff Packet
+
+When `domain-coordinator` needs to create or select a team, use this setup packet:
+
+```json
+{
+  "mode": "setup | route-existing-team",
+  "target_work": "plain-language user goal",
+  "candidate_domain": "short-domain-name",
+  "candidate_team": "<team>",
+  "deliverables": [],
+  "constraints": [],
+  "required_capabilities": [],
+  "proposed_agents": [
+    { "name": "<team>-coordinator", "role": "workflow owner" },
+    { "name": "<team>-specialist", "role": "production specialist" }
+  ],
+  "proposed_stages": [],
+  "knowledge_bootstrap": {
+    "categories": [],
+    "starter_files": [],
+    "evidence_sources": []
+  },
+  "state_machine": {
+    "initial_state": "DISCOVERY",
+    "terminal_states": ["COMPLETE", "BLOCKED", "FAILED"]
+  },
+  "next_action": "generate-files | ask-user | run-team"
+}
+```
+
 ## Transition Rules
 
 - Do not advance past a required review gate unless the reviewer returns `PASS`.
