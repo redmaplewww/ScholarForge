@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Heavy Reasoning Agent Template Config",
+  "type": "object",
+  "required": ["identity", "models", "knowledge", "memory", "gates", "skills", "evolution"],
+  "properties": {
+    "identity": {
+      "type": "object",
+      "required": ["name", "purpose", "audience", "failure_boundaries"],
+      "properties": {
+        "name": { "type": "string" },
+        "purpose": { "type": "string" },
+        "audience": { "type": "string" },
+        "failure_boundaries": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "models": {
+      "type": "object",
+      "required": ["planner", "worker", "critic", "grader"]
+    },
+    "knowledge": {
+      "type": "object",
+      "required": ["directory", "index_type", "top_k", "min_score"]
+    },
+    "memory": {
+      "type": "object",
+      "required": ["directory", "partitions", "read_only_partitions", "write_requires_gate"]
+    },
+    "gates": {
+      "type": "object",
+      "required": ["min_evidence_by_risk", "approval_required_actions", "workspace_root"]
+    },
+    "skills": {
+      "type": "object",
+      "required": ["directory", "enabled"]
+    },
+    "evolution": {
+      "type": "object",
+      "required": ["enabled", "proposal_directory", "direct_mutation_allowed", "approval_required"]
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "prefer_deepagents": { "type": "boolean" }
+      }
+    }
+  }
+}
