@@ -23,4 +23,9 @@ dev = []
 where = ["src"]
 
 [tool.setuptools.package-data]
-reasoning_agent_template = ["web_static/*.html", "web_static/*.css", "web_static/*.js"]
+reasoning_agent_template = [
+  "web_static/*.html",
+  "web_static/*.css",
+  "web_static/*.js",
+  "web_static/vendor/*.js",
+]

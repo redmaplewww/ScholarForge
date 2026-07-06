@@ -2,11 +2,12 @@ import json
 import os
 import tempfile
 import unittest
+from http.client import IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from unittest.mock import patch
 
 from reasoning_agent_template.config import AgentConfig
-from reasoning_agent_template.llm import ChatMessage, DeepSeekChatClient, MissingApiKeyError
+from reasoning_agent_template.llm import ChatMessage, DeepSeekChatClient, LLMRequestError, MissingApiKeyError
 
 
 class _FakeResponse:
@@ -53,6 +54,23 @@ class DeepSeekClientTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["messages"], [{"role": "user", "content": "ping"}])
         self.assertEqual(captured["payload"]["temperature"], 0)
         self.assertIn("Bearer secret-test-key", captured["headers"]["Authorization"])
+
+    def test_network_read_failures_are_wrapped_as_llm_request_errors(self):
+        failures = [
+            TimeoutError("The read operation timed out"),
+            IncompleteRead(b""),
+            RemoteDisconnected("Remote end closed connection without response"),
+        ]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                client = DeepSeekChatClient(api_key="secret-test-key", model="deepseek-v4-flash")
+
+                def fake_urlopen(request, timeout):
+                    raise failure
+
+                with patch("reasoning_agent_template.llm.request.urlopen", fake_urlopen):
+                    with self.assertRaises(LLMRequestError):
+                        client.chat([ChatMessage(role="user", content="ping")], temperature=0)
 
     def test_missing_api_key_is_explicit(self):
         with patch.dict(os.environ, {}, clear=True):

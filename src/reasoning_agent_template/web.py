@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from reasoning_agent_template.config import load_agent_config
+from reasoning_agent_template.llm import LLMRequestError, MissingApiKeyError
 from reasoning_agent_template.multiagent import ChatClient, MultiAgentOrchestrator
 from reasoning_agent_template.skills import SkillRegistry
 
@@ -79,15 +81,46 @@ def _make_handler(
             try:
                 body = self._read_json()
                 message = str(body.get("message", "")).strip()
+                thread_id = str(body.get("thread_id", "default")).strip() or "default"
                 if not message:
                     self._send_json({"error": "message is required"}, status=400)
                     return
-                self._send_json(orchestrator.run(message))
+                if bool(body.get("async")):
+                    worker = threading.Thread(
+                        target=self._run_chat_background,
+                        args=(message, thread_id),
+                        daemon=True,
+                    )
+                    worker.start()
+                    self._send_json({"status": "accepted", "thread_id": thread_id})
+                    return
+                self._send_json(orchestrator.run(message, thread_id=thread_id))
+            except (LLMRequestError, MissingApiKeyError) as exc:
+                self._send_json(
+                    {
+                        "error": str(exc),
+                        "type": type(exc).__name__,
+                        "phase": "llm",
+                        "status": "failed",
+                    },
+                    status=502,
+                )
             except Exception as exc:
-                self._send_json({"error": str(exc), "type": type(exc).__name__}, status=500)
+                self._send_json(
+                    {"error": str(exc), "type": type(exc).__name__, "phase": "server", "status": "failed"},
+                    status=500,
+                )
 
         def log_message(self, format: str, *args: Any) -> None:
             return
+
+        def _run_chat_background(self, message: str, thread_id: str) -> None:
+            try:
+                orchestrator.run(message, thread_id=thread_id)
+            except (LLMRequestError, MissingApiKeyError) as exc:
+                orchestrator.record_failure(message=message, thread_id=thread_id, error=exc, phase="llm")
+            except Exception as exc:
+                orchestrator.record_failure(message=message, thread_id=thread_id, error=exc, phase="server")
 
         def _read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length", "0"))
@@ -115,6 +148,11 @@ def _make_handler(
                 return
             data = target.read_bytes()
             content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+            if content_type.startswith("text/") or content_type in {
+                "application/javascript",
+                "application/json",
+            }:
+                content_type = f"{content_type}; charset=utf-8"
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")

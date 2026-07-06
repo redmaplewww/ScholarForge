@@ -84,19 +84,33 @@ class AgentState:
     user_goal: str = ""
     current_stage: str = "intake"
     response_kind: str = "routine"
+    difficulty: str = "simple"
+    workflow_variant: str = "routine"
+    routing_source: str = "rules"
+    routing_confidence: float = 0.0
+    routing_decision: dict[str, Any] = field(default_factory=dict)
+    reviewer_decision: dict[str, Any] = field(default_factory=dict)
+    reviewer_status: str = "not_run"
     risk_level: str = "none"
     evidence_mode: str = "optional"
+    evidence_strictness: str = "none"
+    evidence_status: str = "not_required"
     evidence_category: str = "routine"
     evidence_reasons: list[str] = field(default_factory=list)
     evidence_sources: list[str] = field(default_factory=list)
     plan: list[str] = field(default_factory=list)
     retrieval_results: list[KnowledgeChunk] = field(default_factory=list)
     external_results: list[KnowledgeChunk] = field(default_factory=list)
+    external_search_attempted: list[str] = field(default_factory=list)
+    external_search_diagnostics: list[dict[str, Any]] = field(default_factory=list)
     evidence: list[EvidenceItem] = field(default_factory=list)
+    qualified_evidence_ids: list[str] = field(default_factory=list)
+    unqualified_evidence_ids: list[str] = field(default_factory=list)
     gate_decisions: list[GateDecision] = field(default_factory=list)
     action_results: list[str] = field(default_factory=list)
     verification_notes: list[str] = field(default_factory=list)
     pending_consolidation: list[str] = field(default_factory=list)
+    evidence_consolidation_proposals: list[dict[str, Any]] = field(default_factory=list)
     answer: str = ""
     stage_trace: list[str] = field(default_factory=list)
     stage_events: list[dict[str, Any]] = field(default_factory=list)

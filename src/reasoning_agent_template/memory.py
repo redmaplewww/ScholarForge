@@ -5,10 +5,55 @@ from pathlib import Path
 from typing import Any
 
 from reasoning_agent_template.gates import GatePolicy
-from reasoning_agent_template.models import EvidenceItem, MemoryWriteResult, utc_now
+from reasoning_agent_template.models import EvidenceItem, GateDecision, MemoryWriteResult, stable_hash, utc_now
 
 
 WRITABLE_PARTITIONS = {"semantic", "episodic", "procedural", "project", "user"}
+KNOWLEDGE_BOUNDARY_TERMS = [
+    "论文",
+    "文档",
+    "资料",
+    "知识库",
+    "api 文档",
+    "api文档",
+    "源码",
+    "规范",
+    "手册",
+    "报告",
+    "paper",
+    "document",
+    "documentation",
+    "manual",
+    "specification",
+    "source material",
+]
+
+
+class ShortTermConversationMemory:
+    """In-process rolling conversation memory for the active web/CLI session."""
+
+    def __init__(self, *, max_turns: int = 8):
+        self.max_turns = max(1, max_turns)
+        self._turns: list[dict[str, Any]] = []
+
+    def append(self, *, user: str, assistant: str, run_id: str) -> None:
+        self._turns.append(
+            {
+                "run_id": run_id,
+                "user": user,
+                "assistant": assistant,
+                "recorded_at": utc_now(),
+            }
+        )
+        if len(self._turns) > self.max_turns:
+            self._turns = self._turns[-self.max_turns :]
+
+    def snapshot(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        turns = self._turns[-limit:] if limit else self._turns
+        return [dict(turn) for turn in turns]
+
+    def count(self) -> int:
+        return len(self._turns)
 
 
 class LongTermMemoryStore:
@@ -91,3 +136,68 @@ class LongTermMemoryStore:
 
     def _path_for(self, partition: str) -> Path:
         return self.root / f"{partition}.jsonl"
+
+
+def explicit_memory_candidate(message: str) -> dict[str, str] | None:
+    text = " ".join(message.strip().split())
+    lowered = text.lower()
+    triggers = [
+        "请记住",
+        "帮我记住",
+        "你要记住",
+        "记住：",
+        "记住:",
+        "记住 ",
+        "remember:",
+        "remember that",
+    ]
+    if not any(trigger in lowered or trigger in text for trigger in triggers):
+        return None
+
+    content = text
+    for trigger in triggers:
+        content = content.replace(trigger, "")
+    content = content.strip(" ：:，,。.")
+    if not content:
+        content = text
+
+    if _looks_like_knowledge_base_content(content):
+        return {
+            "partition": "knowledge",
+            "key": f"knowledge_candidate_{stable_hash(content)[:10]}",
+            "value": content,
+            "boundary": "knowledge_base",
+        }
+
+    key = f"user_fact_{stable_hash(content)[:10]}"
+    for separator in ["是", "叫", "为", "="]:
+        marker = f"我的"
+        if marker in content and separator in content:
+            before, _, after = content.partition(separator)
+            field_name = before.replace(marker, "").strip(" ：:，,。.")
+            if field_name and after.strip():
+                key = field_name[:40]
+                break
+
+    return {"partition": "user", "key": key, "value": content, "boundary": "long_term_memory"}
+
+
+def deny_knowledge_memory_write(*, key: str, value: str, evidence: list[EvidenceItem]) -> MemoryWriteResult:
+    reasons = [
+        "content belongs in knowledge base; add it under knowledge/ and ingest it instead of writing long-term memory"
+    ]
+    gate_id = f"gate_{stable_hash('|'.join(['write_memory', 'knowledge_base', value, *reasons]))[:12]}"
+    decision = GateDecision(
+        gate_id=gate_id,
+        risk_level="medium",
+        status="deny",
+        reasons=reasons,
+        required_evidence=[item.id for item in evidence],
+        approved_by="boundary_policy",
+    )
+    return MemoryWriteResult(partition="knowledge", key=key, decision=decision)
+
+
+def _looks_like_knowledge_base_content(value: str) -> bool:
+    text = value.lower()
+    return any(term in text for term in KNOWLEDGE_BOUNDARY_TERMS)

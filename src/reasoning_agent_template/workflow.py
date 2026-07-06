@@ -1,15 +1,25 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
+import re
+from pathlib import Path
 from time import perf_counter
+from typing import Any, Callable
 
 from reasoning_agent_template.config import AgentConfig
-from reasoning_agent_template.evidence import EvidenceLedger
+from reasoning_agent_template.evidence import EvidenceConsolidationEngine, EvidenceLedger
 from reasoning_agent_template.external_evidence import ExternalEvidenceSearch
 from reasoning_agent_template.gates import GatePolicy
 from reasoning_agent_template.knowledge import LocalKnowledgeBase
-from reasoning_agent_template.models import AgentState, KnowledgeChunk, WorkflowResult, stable_hash, utc_now
+from reasoning_agent_template.models import (
+    AgentState,
+    EvidenceRequirement,
+    GateDecision,
+    KnowledgeChunk,
+    WorkflowResult,
+    stable_hash,
+    utc_now,
+)
 from reasoning_agent_template.risk import classify_evidence_requirement
 
 
@@ -39,13 +49,46 @@ STAGE_AGENTS = {
     "respond": "coordinator",
 }
 
+STRICT_EVIDENCE_CATEGORIES = {
+    "academic",
+    "regulated_advice",
+    "regulated_domain",
+    "high_risk_action",
+    "hard_reasoning",
+    "decision_analysis",
+}
+
+QUALIFIED_EXTERNAL_SOURCE_TYPES = {"paper", "web", "user_experience"}
+STRICT_CURRENT_FACTUAL_TERMS = {"来源", "依据", "引用", "source", "sources", "cite"}
+PROTECTED_ACTION_TERMS = {
+    "删库",
+    "删除数据",
+    "绕过审批",
+    "绕过批准",
+    "跳过审批",
+    "生产环境删",
+    "delete database",
+    "drop database",
+    "bypass approval",
+    "skip approval",
+    "without approval",
+    "绕过权限",
+}
+
 
 class TemplateCoordinator:
     """Deterministic implementation of the template's required state path."""
 
-    def __init__(self, *, config: AgentConfig, workspace_root: Path):
+    def __init__(
+        self,
+        *,
+        config: AgentConfig,
+        workspace_root: Path,
+        event_callback: Callable[[AgentState, dict[str, Any]], None] | None = None,
+    ):
         self.config = config
         self.workspace_root = Path(workspace_root)
+        self.event_callback = event_callback
         self.ledger = EvidenceLedger(self.workspace_root / "evidence" / "ledger.jsonl")
         self.gate_policy = GatePolicy(
             workspace_root=self.workspace_root,
@@ -53,8 +96,10 @@ class TemplateCoordinator:
             approval_required_actions=set(config.gates.get("approval_required_actions", [])),
         )
 
-    def run(self, user_goal: str) -> WorkflowResult:
+    def run(self, user_goal: str, *, routing_decision: dict | None = None) -> WorkflowResult:
         state = AgentState(user_goal=user_goal)
+        if routing_decision:
+            state.routing_decision = dict(routing_decision)
         for stage in STAGES:
             started = perf_counter()
             state.current_stage = stage
@@ -68,6 +113,7 @@ class TemplateCoordinator:
                     "message": f"{stage} started",
                 }
             )
+            self._emit_progress(state, state.stage_events[-1])
             getattr(self, f"_{stage}")(state)
             state.stage_events.append(
                 {
@@ -79,6 +125,7 @@ class TemplateCoordinator:
                     "message": f"{stage} completed",
                 }
             )
+            self._emit_progress(state, state.stage_events[-1])
         return WorkflowResult(
             answer=state.answer,
             state=state,
@@ -87,10 +134,44 @@ class TemplateCoordinator:
             gate_decisions=list(state.gate_decisions),
         )
 
+    def _emit_progress(self, state: AgentState, event: dict[str, Any]) -> None:
+        if self.event_callback is not None:
+            self.event_callback(state, event)
+
     def _intake(self, state: AgentState) -> None:
-        requirement = classify_evidence_requirement(state.user_goal)
+        if state.routing_decision:
+            requirement = _requirement_from_routing(state.routing_decision, state.user_goal)
+            state.routing_source = str(state.routing_decision.get("source", "llm"))
+            state.routing_confidence = float(state.routing_decision.get("confidence", 0.0) or 0.0)
+            state.difficulty = _normalized_difficulty(str(state.routing_decision.get("difficulty", "simple")))
+            state.workflow_variant = _normalized_workflow_variant(
+                str(state.routing_decision.get("workflow", "")),
+                requirement=requirement,
+                strictness=str(state.routing_decision.get("evidence_strictness", "") or ""),
+            )
+            state.reviewer_decision = dict(state.routing_decision.get("reviewer", {}) or {})
+            state.reviewer_status = str(state.reviewer_decision.get("review_status", "not_run"))
+        else:
+            requirement = classify_evidence_requirement(state.user_goal)
+            state.routing_source = "rules"
+            state.routing_confidence = 0.0
+            state.difficulty = "simple" if requirement.mode != "required" else "medium"
+            state.workflow_variant = _normalized_workflow_variant("", requirement=requirement, strictness="")
         state.risk_level = requirement.risk_level
         state.evidence_mode = requirement.mode
+        state.evidence_strictness = _normalized_strictness(
+            str(state.routing_decision.get("evidence_strictness", "") if state.routing_decision else "")
+        ) or _evidence_strictness(
+            category=requirement.category,
+            risk_level=requirement.risk_level,
+            user_goal=state.user_goal,
+        )
+        state.workflow_variant = _normalized_workflow_variant(
+            state.workflow_variant,
+            requirement=requirement,
+            strictness=state.evidence_strictness,
+        )
+        state.evidence_status = "pending" if requirement.mode == "required" else "not_required"
         state.evidence_category = requirement.category
         state.evidence_reasons = list(requirement.reasons)
         state.evidence_sources = list(requirement.sources)
@@ -102,11 +183,20 @@ class TemplateCoordinator:
 
     def _plan(self, state: AgentState) -> None:
         if state.evidence_mode == "required":
+            if state.evidence_strictness == "soft":
+                state.plan = [
+                    "识别为中等风险事实/技术问题。",
+                    "必须先检索本地 RAG、外部网络、论文或用户经验。",
+                    "证据不足时只允许受限回答，不伪造引用。",
+                    "记录证据缺口和检索尝试。",
+                    "不写入长期记忆或技能。",
+                ]
+                return
             state.plan = [
                 "识别高风险或高难强推理目标。",
                 "检索带可引用位置的本地知识。",
                 "把关键结论绑定到证据。",
-                "回答前通过高风险证据门禁。",
+                "回答前通过严格证据门禁。",
                 "只记录记忆或技能更新提案。",
             ]
             return
@@ -135,7 +225,17 @@ class TemplateCoordinator:
         )
         state.external_results = []
         external_sources = [source for source in state.evidence_sources if source in {"papers", "web", "user_experience"}]
+        state.external_search_attempted = list(external_sources)
         if external_sources:
+            state.stage_events.append(
+                {
+                    "time": utc_now(),
+                    "agent": "retriever",
+                    "stage": "retrieve",
+                    "kind": "external_search_attempted",
+                    "message": f"attempted external sources: {', '.join(external_sources)}",
+                }
+            )
             searcher = ExternalEvidenceSearch(
                 ledger=self.ledger,
                 timeout_seconds=int(self.config.knowledge.get("external_timeout_seconds", 8)),
@@ -145,6 +245,7 @@ class TemplateCoordinator:
                 top_k=int(self.config.knowledge.get("external_top_k", top_k)),
                 sources=external_sources,
             )
+            state.external_search_diagnostics = list(searcher.diagnostics)
         by_id = {item.id: item for item in self.ledger.list()}
         ordered_ids = [
             result.evidence_id
@@ -225,6 +326,14 @@ class TemplateCoordinator:
             return
         evidence_results = [*state.retrieval_results, *state.external_results]
         if not evidence_results:
+            if state.evidence_strictness == "soft":
+                state.answer = (
+                    "已触发证据检索，但未检索到足够证据；下面只能作为受限回答，不能当作可靠结论，"
+                    "也不会引用不存在的证据。"
+                    if _has_cjk(state.user_goal)
+                    else "Evidence retrieval ran but did not find enough support; any answer must be limited and uncited."
+                )
+                return
             state.answer = (
                 "这是高风险或高难强推理任务，但当前没有检索到足够证据，所以不能直接给结论。"
                 "请补充知识库资料、明确证据来源，或降低任务风险后再继续。"
@@ -236,16 +345,17 @@ class TemplateCoordinator:
         if _has_cjk(state.user_goal):
             state.answer = (
                 "这是高风险或高难强推理任务，已启用证据系统。当前回答只基于已检索证据生成；"
-                f"证据：[{best.evidence_id}] {best.source} ({best.span})。"
+                "参考文献和证据详情请查看调试界面的证据栏。"
             )
         else:
             state.answer = (
                 "Evidence mode is required for this high-risk or hard reasoning task. "
-                f"Source: [{best.evidence_id}] {best.source} ({best.span})."
+                "References and evidence details are available in the evidence panel."
             )
 
     def _evidence_audit(self, state: AgentState) -> None:
         if state.evidence_mode != "required":
+            state.evidence_status = "not_required"
             state.verification_notes.append("普通对话未启用强制证据系统")
             return
         if state.retrieval_results and not state.evidence:
@@ -254,15 +364,59 @@ class TemplateCoordinator:
             state.verification_notes.append("学术/研究任务缺少论文或外部学术证据")
         if not state.evidence:
             state.verification_notes.append("必需证据模式缺少支持证据")
+        if state.evidence_strictness == "soft":
+            state.verification_notes.append("中等风险软证据策略：已触发检索，证据不足时仅允许受限回答")
 
     def _gate(self, state: AgentState) -> None:
-        gate_evidence = state.evidence
-        if state.evidence_category == "academic":
-            gate_evidence = [
-                item
-                for item in state.evidence
-                if item.source_type in {"paper", "web", "user_experience"}
+        gate_evidence = self._qualified_gate_evidence(state)
+        required_count = self.gate_policy.min_evidence_by_risk.get(state.risk_level, 1)
+        state.qualified_evidence_ids = [item.id for item in gate_evidence]
+        state.unqualified_evidence_ids = [
+            item.id for item in state.evidence if item.id not in set(state.qualified_evidence_ids)
+        ]
+        state.evidence_status = _evidence_status(
+            state=state,
+            qualified_evidence=gate_evidence,
+            required_count=required_count,
+        )
+        if state.evidence_category == "high_risk_action" and _is_protected_action_request(state.user_goal):
+            state.qualified_evidence_ids = []
+            state.unqualified_evidence_ids = [item.id for item in state.evidence]
+            state.evidence_status = "protected_denied"
+            reasons = [
+                "保护性动作请求：生产、删除、绕过审批或破坏性执行不能由证据数量放行",
+                "需要明确人工审批、授权凭证和安全替代方案；当前对话直接拒绝",
             ]
+            decision = GateDecision(
+                gate_id=f"gate_{stable_hash('|'.join([state.response_kind, state.risk_level, 'protected-deny', *reasons]))[:12]}",
+                risk_level=state.risk_level,
+                status="deny",
+                reasons=reasons,
+                required_evidence=state.qualified_evidence_ids,
+            )
+            state.verification_notes.append("保护性动作门禁拒绝")
+            state.gate_decisions.append(decision)
+            return
+        if (
+            state.evidence_mode == "required"
+            and state.evidence_strictness == "soft"
+            and len(gate_evidence) < required_count
+            and self._evidence_search_was_attempted(state)
+        ):
+            reasons = [
+                "中等风险软证据策略：已尝试检索但未检索到足够证据，允许受限回答",
+                "输出必须明确证据不足，不能伪造引用或给出确定性结论",
+            ]
+            decision = GateDecision(
+                gate_id=f"gate_{stable_hash('|'.join([state.response_kind, state.risk_level, state.evidence_status, *reasons]))[:12]}",
+                risk_level=state.risk_level,
+                status="allow",
+                reasons=reasons,
+                required_evidence=[item.id for item in state.evidence],
+            )
+            state.verification_notes.append("软证据门禁已允许受限回答")
+            state.gate_decisions.append(decision)
+            return
         decision = self.gate_policy.evaluate(
             action=state.response_kind,
             risk_level=state.risk_level,
@@ -270,6 +424,42 @@ class TemplateCoordinator:
             target_path=None,
         )
         state.gate_decisions.append(decision)
+
+    def _qualified_gate_evidence(self, state: AgentState) -> list:
+        gate_evidence = state.evidence
+        if state.evidence_category == "academic":
+            return [
+                item
+                for item in state.evidence
+                if item.source_type in QUALIFIED_EXTERNAL_SOURCE_TYPES
+            ]
+        if state.evidence_category in {
+            "explicit_evidence_request",
+            "current_factual",
+            "decision_analysis",
+            "technical_claim",
+            "scientific_claim",
+            "hard_reasoning",
+            "regulated_advice",
+            "regulated_domain",
+        }:
+            external_evidence = [
+                item
+                for item in state.evidence
+                if item.source_type in QUALIFIED_EXTERNAL_SOURCE_TYPES
+            ]
+            if external_evidence:
+                return external_evidence
+            if not self._has_strong_local_rag(state):
+                return []
+        return gate_evidence
+
+    def _evidence_search_was_attempted(self, state: AgentState) -> bool:
+        return bool(state.external_search_attempted or "rag" in state.evidence_sources)
+
+    def _has_strong_local_rag(self, state: AgentState) -> bool:
+        threshold = float(self.config.gates.get("local_evidence_min_score", 0.45))
+        return any(chunk.score >= threshold for chunk in state.retrieval_results)
 
     def _act_or_answer(self, state: AgentState) -> None:
         if state.gate_decisions[-1].status != "allow":
@@ -285,12 +475,87 @@ class TemplateCoordinator:
             state.verification_notes.append("门禁已通过")
 
     def _consolidate(self, state: AgentState) -> None:
-        state.pending_consolidation.append("不直接写入长期记忆；如重复出现稳定证据，只生成沉淀提案。")
+        gate = state.gate_decisions[-1] if state.gate_decisions else None
+        qualified = [
+            item
+            for item in state.evidence
+            if item.id in set(state.qualified_evidence_ids)
+            and item.source_type in QUALIFIED_EXTERNAL_SOURCE_TYPES
+            and item.confidence >= 0.7
+        ]
+        if gate and gate.status == "allow" and qualified:
+            engine = EvidenceConsolidationEngine(self.workspace_root / "evidence" / "consolidation-proposals")
+            proposal = engine.propose(
+                query=state.user_goal,
+                category=state.evidence_category,
+                risk_level=state.risk_level,
+                evidence=qualified,
+            )
+            state.evidence_consolidation_proposals.append(proposal)
+            state.pending_consolidation.append(f"已生成证据沉淀提案：{proposal['path']}")
+            return
+        state.pending_consolidation.append("不直接写入长期记忆或知识库；无合格外部证据时不生成证据沉淀提案。")
 
     def _respond(self, state: AgentState) -> None:
-        if state.evidence and state.evidence[0].id not in state.answer:
-            label = "证据" if _has_cjk(state.user_goal) else "Evidence"
-            state.answer = f"{state.answer} {label}: [{state.evidence[0].id}]"
+        return
+
+
+def _requirement_from_routing(route: dict, user_goal: str) -> EvidenceRequirement:
+    fallback = classify_evidence_requirement(user_goal)
+    mode = str(route.get("evidence_mode") or fallback.mode).lower()
+    if mode not in {"optional", "required"}:
+        mode = fallback.mode
+    risk_level = str(route.get("risk_level") or fallback.risk_level).lower()
+    if risk_level not in {"none", "low", "medium", "high", "critical"}:
+        risk_level = fallback.risk_level
+    category = str(route.get("category") or fallback.category).strip() or fallback.category
+    reasons = _string_list(route.get("reasons")) or list(fallback.reasons)
+    sources = _source_list(route.get("sources")) or list(fallback.sources)
+    if mode == "required" and not sources:
+        sources = ["rag", "web", "papers", "user_experience"]
+    return EvidenceRequirement(
+        mode=mode,
+        risk_level=risk_level,
+        category=category,
+        reasons=reasons,
+        sources=sources,
+    )
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _source_list(value: object) -> list[str]:
+    allowed = {"rag", "web", "papers", "user_experience"}
+    return [item for item in _string_list(value) if item in allowed]
+
+
+def _normalized_strictness(value: str) -> str:
+    normalized = value.lower().strip()
+    return normalized if normalized in {"none", "soft", "strict"} else ""
+
+
+def _normalized_difficulty(value: str) -> str:
+    normalized = value.lower().strip()
+    return normalized if normalized in {"simple", "medium", "hard"} else "simple"
+
+
+def _normalized_workflow_variant(value: str, *, requirement: EvidenceRequirement, strictness: str) -> str:
+    normalized = value.lower().strip()
+    if normalized in {"routine", "evidence_soft", "evidence_strict", "protected_action"}:
+        return normalized
+    if requirement.category == "high_risk_action":
+        return "protected_action"
+    if requirement.mode != "required":
+        return "routine"
+    if strictness == "strict" or requirement.risk_level in {"high", "critical"}:
+        return "evidence_strict"
+    return "evidence_soft"
 
 
 def _has_cjk(value: str) -> bool:
@@ -304,6 +569,44 @@ def _localized_purpose(value: str, *, chinese: bool) -> str:
     if value == known:
         return "证据优先、带状态门禁、知识库、记忆和审核式自进化的重推理 Agent 开发"
     return value
+
+
+def _evidence_strictness(*, category: str, risk_level: str, user_goal: str = "") -> str:
+    if risk_level in {"high", "critical"} or category in STRICT_EVIDENCE_CATEGORIES:
+        return "strict"
+    if category == "current_factual" and _needs_strict_current_factual(user_goal):
+        return "strict"
+    if risk_level == "medium":
+        return "soft"
+    return "none"
+
+
+def _evidence_status(*, state: AgentState, qualified_evidence: list, required_count: int) -> str:
+    if state.evidence_mode != "required":
+        return "not_required"
+    if len(qualified_evidence) >= required_count:
+        return "sufficient"
+    if qualified_evidence:
+        return "partial"
+    if state.evidence:
+        return "unqualified"
+    if state.external_search_attempted or "rag" in state.evidence_sources:
+        return "exhausted"
+    return "missing"
+
+
+def _needs_strict_current_factual(value: str) -> bool:
+    text = value.lower()
+    has_year_or_current = bool(re.search(r"\b20\d{2}\b", text)) or any(
+        term in text for term in ["最新", "当前", "现在", "current", "latest", "recent"]
+    )
+    asks_sources = any(term in text for term in STRICT_CURRENT_FACTUAL_TERMS)
+    return has_year_or_current and asks_sources
+
+
+def _is_protected_action_request(value: str) -> bool:
+    text = value.lower()
+    return any(term in text for term in PROTECTED_ACTION_TERMS)
 
 
 def _is_template_question(value: str) -> bool:
@@ -333,7 +636,7 @@ def _requires_evidence_system(value: str) -> bool:
 
 def _is_identity_question(value: str) -> bool:
     text = value.lower().strip()
-    identity_terms = [
+    chinese_terms = [
         "你是谁",
         "你是啥",
         "你是什么",
@@ -341,10 +644,14 @@ def _is_identity_question(value: str) -> bool:
         "你可以做什么",
         "介绍一下你",
         "你好",
-        "hello",
-        "hi",
-        "who are you",
-        "what are you",
-        "what can you do",
     ]
-    return any(term in text for term in identity_terms)
+    if any(term in text for term in chinese_terms):
+        return True
+    english_patterns = [
+        r"\bhello\b",
+        r"\bhi\b",
+        r"\bwho are you\b",
+        r"\bwhat are you\b",
+        r"\bwhat can you do\b",
+    ]
+    return any(re.search(pattern, text) for pattern in english_patterns)

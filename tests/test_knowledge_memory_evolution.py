@@ -37,6 +37,28 @@ class KnowledgeMemoryEvolutionTests(unittest.TestCase):
             self.assertGreater(results[0].score, 0)
             self.assertTrue(results[0].evidence_id.startswith("ev_"))
 
+    def test_knowledge_base_does_not_ingest_memory_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge_dir = root / "knowledge"
+            memory_dir = root / "memory"
+            knowledge_dir.mkdir()
+            memory_dir.mkdir()
+            (knowledge_dir / "kb.md").write_text(
+                "Knowledge base documents are external or project source material.",
+                encoding="utf-8",
+            )
+            (memory_dir / "user.jsonl").write_text(
+                '{"partition":"user","key":"secret","value":"memory-only-vector-database-fact"}\n',
+                encoding="utf-8",
+            )
+            ledger = EvidenceLedger(root / "evidence" / "ledger.jsonl")
+            kb = LocalKnowledgeBase(knowledge_dir, ledger=ledger)
+
+            results = kb.retrieve("memory-only-vector-database-fact", top_k=3)
+
+            self.assertEqual(results, [])
+
     def test_long_term_memory_requires_evidence_and_never_writes_shared_partition(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

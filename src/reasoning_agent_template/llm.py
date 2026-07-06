@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import http.client
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -124,6 +125,8 @@ class DeepSeekChatClient:
             raise LLMRequestError(f"DeepSeek HTTP {exc.code}: {details}") from exc
         except error.URLError as exc:
             raise LLMRequestError(f"DeepSeek request failed: {exc.reason}") from exc
+        except (TimeoutError, http.client.HTTPException, OSError) as exc:
+            raise LLMRequestError(f"DeepSeek transport failed: {type(exc).__name__}: {exc}") from exc
 
         data = json.loads(body)
         try:

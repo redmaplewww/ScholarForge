@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from reasoning_agent_template.models import EvidenceItem, stable_hash, utc_now
 
@@ -51,3 +52,43 @@ class EvidenceLedger:
                 if line:
                     items.append(EvidenceItem.from_dict(json.loads(line)))
         return items
+
+
+class EvidenceConsolidationEngine:
+    """Create reviewable evidence consolidation proposals without mutating knowledge."""
+
+    def __init__(self, proposals_dir: Path):
+        self.proposals_dir = Path(proposals_dir)
+
+    def propose(
+        self,
+        *,
+        query: str,
+        category: str,
+        risk_level: str,
+        evidence: list[EvidenceItem],
+    ) -> dict[str, Any]:
+        if not evidence:
+            raise ValueError("evidence consolidation proposals require evidence")
+        seed = "|".join([query, category, risk_level, *[item.id for item in evidence]])
+        proposal_id = f"evcon_{stable_hash(seed)[:12]}"
+        target = f"knowledge/pending-evidence/{proposal_id}.md"
+        payload = {
+            "proposal_id": proposal_id,
+            "status": "proposed",
+            "created_at": utc_now(),
+            "query": query,
+            "category": category,
+            "risk_level": risk_level,
+            "target": target,
+            "evidence_ids": [item.id for item in evidence],
+            "source_uris": [item.uri for item in evidence],
+            "requires_human_approval": True,
+            "direct_mutation_performed": False,
+            "suggested_summary": "Review these evidence items before adding them to the project knowledge base.",
+        }
+        self.proposals_dir.mkdir(parents=True, exist_ok=True)
+        path = self.proposals_dir / f"{proposal_id}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        payload["path"] = str(path)
+        return payload

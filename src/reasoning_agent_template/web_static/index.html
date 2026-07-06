@@ -14,7 +14,7 @@
           <p id="runtimeLine">正在加载运行时...</p>
         </div>
         <div class="top-actions">
-          <span class="llm-toggle" title="所有回答都必须由 DeepSeek API 生成">DeepSeek 必需</span>
+          <span class="llm-toggle" title="所有回答都必须由 DeepSeek API 生成">DeepSeek 必须</span>
           <button id="refreshButton" type="button">刷新</button>
         </div>
       </header>
@@ -44,17 +44,27 @@
               <strong id="agentStatus">idle</strong>
             </div>
             <div class="metric">
-              <span>状态机</span>
+              <span>当前节点</span>
               <strong id="stateStatus">idle</strong>
+            </div>
+            <div class="metric">
+              <span>路由 / 工作流</span>
+              <strong id="routingStatus">idle</strong>
             </div>
             <div class="metric">
               <span>证据系统</span>
               <strong id="evidenceCount">0</strong>
             </div>
             <div class="metric">
-              <span>RAG 搜索结果 / 外部证据</span>
+              <span>RAG / 外部证据</span>
               <strong id="ragCount">0</strong>
             </div>
+          </div>
+
+          <div id="progressBanner" class="progress-banner" aria-live="polite">
+            <span id="workingAgent">等待运行</span>
+            <strong id="workingStage">idle</strong>
+            <p id="workingHint">发送消息后，这里会显示当前 Agent、工作流节点和执行提示。</p>
           </div>
 
           <div class="monitor-layout">
@@ -68,15 +78,16 @@
 
             <section class="panel state-panel">
               <div class="section-head">
-                <h2>状态机</h2>
+                <h2>工作流点线图</h2>
                 <span id="currentStage">idle</span>
               </div>
-              <ol id="stateTimeline" class="timeline"></ol>
+              <div id="workflowGraph" class="workflow-graph" aria-label="工作流点线图"></div>
             </section>
 
             <section class="panel detail-panel">
-              <div class="tabs" role="tablist" aria-label="Debug detail tabs">
+              <div class="tabs" role="tablist" aria-label="调试详情">
                 <button class="tab active" data-tab="evidence" type="button">证据</button>
+                <button class="tab" data-tab="routing" type="button">路由/审查</button>
                 <button class="tab" data-tab="rag" type="button">RAG</button>
                 <button class="tab" data-tab="external" type="button">外部证据</button>
                 <button class="tab" data-tab="workflow" type="button">工作流</button>
@@ -93,6 +104,7 @@
       </main>
     </div>
 
+    <script src="/assets/vendor/cytoscape.min.js"></script>
     <script src="/assets/app.js"></script>
   </body>
 </html>

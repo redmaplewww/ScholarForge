@@ -54,7 +54,7 @@ button:hover {
   min-height: 76px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.94);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -106,10 +106,15 @@ button:hover {
   color: white;
 }
 
+#sendButton:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .debug-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.6fr);
+  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1.62fr);
   gap: 16px;
   padding: 16px;
   min-height: 0;
@@ -212,14 +217,14 @@ button:hover {
 
 .monitor-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
 }
 
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-bottom: 1px solid var(--border);
 }
 
@@ -247,10 +252,64 @@ button:hover {
   line-height: 1.2;
 }
 
+.progress-banner {
+  min-height: 54px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: #fbfcfb;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-banner span,
+.progress-banner strong {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.progress-banner.running strong,
+.progress-banner.running span {
+  color: var(--teal);
+  border-color: #9ed6ce;
+  background: #edf8f6;
+}
+
+.progress-banner.completed strong,
+.progress-banner.completed span {
+  color: var(--green);
+  border-color: #b7d8bb;
+  background: #eef8ef;
+}
+
+.progress-banner.failed strong,
+.progress-banner.failed span {
+  color: var(--red);
+  border-color: #f0b7af;
+  background: #fff1ef;
+}
+
+.progress-banner p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .monitor-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(190px, 0.55fr) minmax(220px, 0.65fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(210px, 0.42fr) minmax(0, 1.58fr);
+  grid-template-rows: minmax(330px, 0.78fr) minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
 }
@@ -264,8 +323,22 @@ button:hover {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.state-panel {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.agent-panel {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.detail-panel {
+  grid-column: 2;
+  grid-row: 2;
+}
+
 .agent-list,
-.timeline,
 .tab-content {
   overflow: auto;
   padding: 12px;
@@ -302,6 +375,11 @@ button:hover {
   line-height: 1.45;
 }
 
+.agent-row:has(.badge.active) {
+  border-color: #9ed6ce;
+  background: #f7fcfb;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -322,8 +400,16 @@ button:hover {
   background: #eef8ef;
 }
 
+.badge.active,
+.badge.running {
+  color: var(--teal);
+  border-color: #9ed6ce;
+  background: #edf8f6;
+}
+
 .badge.interrupt,
 .badge.skipped,
+.badge.noop,
 .badge.missing_api_key {
   color: var(--amber);
   border-color: #ead39a;
@@ -337,34 +423,166 @@ button:hover {
   background: #fff1ef;
 }
 
-.timeline {
-  list-style: none;
-  margin: 0;
-}
-
-.timeline li {
+.workflow-graph {
   position: relative;
-  padding: 9px 10px 9px 28px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  min-height: 408px;
+  padding: 0;
+  background: #fbfcfb;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
-.timeline small {
-  display: block;
-  margin-top: 4px;
+.workflow-graph.detail-graph {
+  border: 1px solid var(--border);
+  margin-bottom: 10px;
+  background: #fff;
+  min-height: 438px;
+}
+
+.workflow-graph-canvas {
+  min-height: 360px;
+  height: 360px;
+  width: 100%;
+  background:
+    linear-gradient(rgba(216, 222, 214, 0.36) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(216, 222, 214, 0.28) 1px, transparent 1px),
+    #fbfcfb;
+  background-size: 28px 28px;
+}
+
+.detail-graph .workflow-graph-canvas {
+  min-height: 382px;
+  height: 382px;
+}
+
+.workflow-graph-legend {
+  min-height: 42px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.86);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workflow-graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid var(--border);
+}
+
+.legend-dot.active {
+  background: var(--teal);
+  border-color: var(--teal);
+}
+
+.legend-dot.completed {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.legend-dot.skipped {
+  background: var(--amber);
+  border-color: var(--amber);
+}
+
+.legend-line {
+  width: 22px;
+  height: 0;
+  border-top: 2px dashed var(--amber);
+  display: inline-block;
+}
+
+.reference-list h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.reference-item strong {
+  color: var(--ink);
+}
+
+.workflow-selection {
+  border-color: #b8d8d3;
+  background: #f8fcfb;
+}
+
+.workflow-selection-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.workflow-selection-head h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.workflow-selection-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.workflow-selection-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workflow-selection-grid section {
+  border: 1px solid var(--border);
+  background: #fff;
+  padding: 9px;
+  min-width: 0;
+}
+
+.workflow-selection-grid h4 {
+  margin: 0 0 7px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.workflow-selection-grid p + p {
+  margin-top: 6px;
+}
+
+.artifact-block {
+  margin-top: 7px;
+}
+
+.artifact-block h5 {
+  margin: 0 0 4px;
   color: var(--muted);
   font-size: 11px;
+  line-height: 1.2;
 }
 
-.timeline li::before {
-  content: "";
-  position: absolute;
-  left: 10px;
-  top: 15px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--teal);
+.artifact-json {
+  max-height: 190px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: #fbfcfb;
+  overflow: auto;
 }
 
 .tabs {
@@ -424,11 +642,8 @@ button:hover {
   }
 
   .debug-grid {
-    overflow: visible;
-  }
-
-  .debug-grid {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .conversation-panel,
@@ -451,6 +666,18 @@ button:hover {
   .status-strip,
   .monitor-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+
+  .workflow-selection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .state-panel,
+  .agent-panel,
+  .detail-panel {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .metric {
