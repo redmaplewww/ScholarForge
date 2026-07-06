@@ -6,3 +6,8 @@ __pycache__/
 .venv/
 node_modules/
 server.*.log
+logs/
+openclaude/
+evidence/consolidation-proposals/
+configs/workflows/*.draft.json
+configs/workflows/proposals/

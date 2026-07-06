@@ -3,5 +3,13 @@
 from reasoning_agent_template.config import AgentConfig, load_agent_config
 from reasoning_agent_template.plugins import PluginLoader
 from reasoning_agent_template.workflow import TemplateCoordinator
+from reasoning_agent_template.workflow_spec import WorkflowSpec, WorkflowSpecStore
 
-__all__ = ["AgentConfig", "PluginLoader", "TemplateCoordinator", "load_agent_config"]
+__all__ = [
+    "AgentConfig",
+    "PluginLoader",
+    "TemplateCoordinator",
+    "WorkflowSpec",
+    "WorkflowSpecStore",
+    "load_agent_config",
+]

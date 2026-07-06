@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from reasoning_agent_template.code_modifier import CodeModifierAdapter, LocalWorkflowSpecCodeModifier
 from reasoning_agent_template.config import load_agent_config
 from reasoning_agent_template.llm import LLMRequestError, MissingApiKeyError
 from reasoning_agent_template.multiagent import ChatClient, MultiAgentOrchestrator
 from reasoning_agent_template.skills import SkillRegistry
+from reasoning_agent_template.workflow_spec import WorkflowSpec, WorkflowSpecStore
 
 
 STATIC_ROOT = Path(__file__).parent / "web_static"
@@ -25,6 +27,7 @@ def create_server(
     config_path: str | Path = "agent.yaml",
     workspace_root: str | Path = ".",
     llm_client_factory: Callable[[Any], ChatClient] | None = None,
+    code_modifier_adapter: CodeModifierAdapter | None = None,
 ) -> ThreadingHTTPServer:
     workspace = Path(workspace_root)
     config = load_agent_config(Path(config_path))
@@ -33,7 +36,12 @@ def create_server(
         workspace_root=workspace,
         llm_client_factory=llm_client_factory,
     )
-    handler = _make_handler(orchestrator=orchestrator, workspace=workspace, config_path=Path(config_path))
+    handler = _make_handler(
+        orchestrator=orchestrator,
+        workspace=workspace,
+        config_path=Path(config_path),
+        code_modifier_adapter=code_modifier_adapter,
+    )
     return ThreadingHTTPServer((host, port), handler)
 
 
@@ -42,7 +50,11 @@ def _make_handler(
     orchestrator: MultiAgentOrchestrator,
     workspace: Path,
     config_path: Path,
+    code_modifier_adapter: CodeModifierAdapter | None = None,
 ) -> type[BaseHTTPRequestHandler]:
+    workflow_store = WorkflowSpecStore(workspace, orchestrator.config.runtime)
+    code_modifier = code_modifier_adapter or LocalWorkflowSpecCodeModifier(workspace)
+
     class DebugHandler(BaseHTTPRequestHandler):
         server_version = "ReasoningAgentDebug/0.1"
 
@@ -56,6 +68,9 @@ def _make_handler(
                 return
             if path == "/api/workflow":
                 self._send_json(orchestrator.workflow_status())
+                return
+            if path == "/api/workflow/spec":
+                self._send_json(_workflow_spec_payload(workflow_store))
                 return
             if path == "/api/skills":
                 skills = SkillRegistry(workspace / "skills").load()
@@ -75,6 +90,45 @@ def _make_handler(
 
         def do_POST(self) -> None:
             path = urlparse(self.path).path
+            if path == "/api/workflow/draft":
+                try:
+                    body = self._read_json()
+                    spec = WorkflowSpec.from_dict(dict(body.get("spec") or body))
+                    self._send_json(workflow_store.save_draft(spec))
+                except Exception as exc:
+                    self._send_json({"error": str(exc), "type": type(exc).__name__}, status=400)
+                return
+            if path == "/api/workflow/proposal":
+                try:
+                    body = self._read_json()
+                    spec = WorkflowSpec.from_dict(dict(body["spec"])) if body.get("spec") else None
+                    if spec is not None:
+                        workflow_store.save_draft(spec)
+                    self._send_json(workflow_store.create_proposal(spec))
+                except Exception as exc:
+                    self._send_json({"error": str(exc), "type": type(exc).__name__}, status=400)
+                return
+            if path == "/api/workflow/apply":
+                try:
+                    body = self._read_json()
+                    proposal_id = str(body.get("proposal_id", "")).strip()
+                    if not proposal_id:
+                        self._send_json({"error": "proposal_id is required"}, status=400)
+                        return
+                    if not bool(body.get("approved")):
+                        self._send_json({"error": "approved=true is required"}, status=403)
+                        return
+                    proposal = workflow_store.load_proposal(proposal_id)
+                    result = code_modifier.apply_workflow_proposal(
+                        proposal,
+                        approved_by=str(body.get("approved_by") or "local-user"),
+                    )
+                    payload = result.to_dict()
+                    payload["workflow"] = _workflow_spec_payload(workflow_store)
+                    self._send_json(payload, status=200 if result.status == "applied" else 409)
+                except Exception as exc:
+                    self._send_json({"error": str(exc), "type": type(exc).__name__}, status=500)
+                return
             if path != "/api/chat":
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
                 return
@@ -161,6 +215,23 @@ def _make_handler(
             self.wfile.write(data)
 
     return DebugHandler
+
+
+def _workflow_spec_payload(store: WorkflowSpecStore) -> dict[str, Any]:
+    spec = store.load()
+    draft = store.load_draft()
+    validation_target = draft or spec
+    validation = validation_target.validate(base=spec if draft else None)
+    return {
+        "spec": spec.to_dict(),
+        "draft": draft.to_dict() if draft else None,
+        "validation": validation.to_dict(),
+        "paths": {
+            "spec": str(store.spec_path),
+            "draft": str(store.draft_path),
+            "proposal_dir": str(store.proposal_dir),
+        },
+    }
 
 
 def serve(

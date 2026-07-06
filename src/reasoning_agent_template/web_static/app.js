@@ -4,6 +4,9 @@
   threadId: getOrCreateThreadId(),
   pendingQuestion: null,
   selectedWorkflowElement: null,
+  workflowSpecPayload: null,
+  workflowEditMode: false,
+  workflowProposal: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -144,7 +147,7 @@ function renderStatus(payload) {
 
   renderWorkingHint(payload);
   renderAgents(payload.agents || []);
-  renderWorkflowGraph(payload.workflow || {});
+  renderWorkflowGraph(workflowDisplayGraph(payload));
   renderTab();
 }
 
@@ -173,6 +176,62 @@ function renderAgents(agents) {
       `;
     })
     .join("");
+}
+
+function workflowDisplayGraph(payload) {
+  const runtimeWorkflow = payload.workflow || {};
+  const specPayload = state.workflowSpecPayload || {};
+  const spec = state.workflowEditMode ? specPayload.draft || specPayload.spec : null;
+  if (!spec) return runtimeWorkflow;
+  const runtimeNodes = new Map((runtimeWorkflow.nodes || []).map((node) => [node.id, node]));
+  return {
+    ...runtimeWorkflow,
+    status: runtimeWorkflow.status || "idle",
+    nodes: (spec.nodes || []).map((node) => {
+      const runtimeNode = runtimeNodes.get(node.id) || {};
+      return {
+        ...runtimeNode,
+        id: node.id,
+        label: node.label || node.id,
+        agent: node.agent || runtimeNode.agent || "coordinator",
+        description: node.description || "",
+        work: node.work || node.description || "",
+        input: node.input_contract || "",
+        output: node.output_contract || "",
+        checkpoint: Boolean(node.checkpoint),
+        handler_kind: node.handler_kind || "builtin",
+        handler: node.handler || node.id,
+        gate_policy: node.gate_policy || {},
+        status: runtimeNode.status || "pending",
+        effective_status: runtimeNode.effective_status || "pending",
+        work_done: Boolean(runtimeNode.work_done),
+        skip_reason: runtimeNode.skip_reason || "",
+        observed: runtimeNode.observed || "draft",
+        duration_ms: runtimeNode.duration_ms,
+        artifacts: runtimeNode.artifacts || { actual_input: {}, actual_output: {}, process: [], handoff: {} },
+      };
+    }),
+    edges: (spec.edges || []).map((edge) => ({
+      id: edge.id || `${edge.from}->${edge.to}`,
+      from: edge.from,
+      to: edge.to,
+      type: edge.type || "flow",
+      label: edge.condition || edge.label || "",
+      condition: edge.condition || "",
+      handoff_contract: edge.handoff_contract || {},
+      gate_policy: edge.gate_policy || {},
+      planner_contract: edge.planner_contract || {},
+      reviewer_required: Boolean(edge.reviewer_required),
+    })),
+    checkpoints: (spec.nodes || []).filter((node) => node.checkpoint).map((node) => node.id),
+    spec: {
+      name: spec.name,
+      revision: spec.revision,
+      version: spec.version,
+      start_node: spec.start_node,
+      terminal_nodes: spec.terminal_nodes || [],
+    },
+  };
 }
 
 function renderWorkflowGraph(workflow) {
@@ -697,7 +756,7 @@ function renderExternalTab(target, payload) {
 }
 
 function renderWorkflowSelectionPanel(payload) {
-  const workflow = payload.workflow || {};
+  const workflow = workflowDisplayGraph(payload);
   const selection = state.selectedWorkflowElement;
   if (!selection) {
     return `
@@ -780,7 +839,7 @@ function renderWorkflowNodeSelection(payload, node) {
 }
 
 function renderWorkflowEdgeSelection(payload, edge) {
-  const workflow = payload.workflow || {};
+  const workflow = workflowDisplayGraph(payload);
   const source = workflowSelectedNode(workflow, edge.from) || { id: edge.from };
   const target = workflowSelectedNode(workflow, edge.to) || { id: edge.to };
   const details = workflowEdgeTransitionDetails(payload, edge, source, target);
@@ -992,7 +1051,7 @@ function renderWorkflowEventList(events) {
 }
 
 function renderWorkflowTab(target, payload) {
-  const workflow = payload.workflow || {};
+  const workflow = workflowDisplayGraph(payload);
   const nodes = workflow.nodes || [];
   const edges = workflow.edges || [];
   target.innerHTML = `
@@ -1001,6 +1060,7 @@ function renderWorkflowTab(target, payload) {
       <p>当前节点: ${escapeHtml(workflow.current || "idle")} | 工作流类型: ${escapeHtml(labelStatus(workflow.variant || "idle"))}</p>
       <p class="mono">检查点: ${escapeHtml((workflow.checkpoints || []).join(", "))}</p>
     </article>
+    ${renderWorkflowEditor(payload)}
     ${renderWorkflowSelectionPanel(payload)}
     ${nodes
       .map(
@@ -1021,6 +1081,151 @@ function renderWorkflowTab(target, payload) {
     <article class="detail-item">
       <p><strong>控制流边</strong></p>
       <p class="mono">${escapeHtml(edges.map((edge) => `${edge.from} -> ${edge.to} [${edge.type || "flow"}] ${edge.label || ""}`).join("\n"))}</p>
+    </article>
+  `;
+}
+
+function renderWorkflowEditor(payload) {
+  const specPayload = state.workflowSpecPayload;
+  if (!specPayload) {
+    return `
+      <article class="detail-item workflow-editor">
+        <header class="workflow-editor-head">
+          <div>
+            <p><strong>工作流编辑器</strong></p>
+            <p>尚未加载 workflow spec。</p>
+          </div>
+          <button type="button" class="secondary" data-workflow-action="load-spec">加载 Spec</button>
+        </header>
+      </article>
+    `;
+  }
+  const spec = editableWorkflowSpec(payload);
+  const validation = specPayload.validation || {};
+  const proposal = state.workflowProposal;
+  const selected = state.selectedWorkflowElement;
+  const protectedNodes = new Set(spec.protected_nodes || []);
+  return `
+    <article class="detail-item workflow-editor ${state.workflowEditMode ? "editing" : ""}">
+      <header class="workflow-editor-head">
+        <div>
+          <p><strong>工作流编辑器</strong> <span class="badge ${validation.ok ? "completed" : "interrupt"}">${validation.ok ? "校验通过" : "需要处理"}</span></p>
+          <p class="mono">Spec: ${escapeHtml(spec.name || "workflow")} | revision=${escapeHtml(spec.revision || "dev")} | draft=${specPayload.draft ? "yes" : "no"}</p>
+        </div>
+        <div class="workflow-editor-actions">
+          <button type="button" class="secondary" data-workflow-action="toggle-edit">${state.workflowEditMode ? "退出编辑" : "编辑工作流"}</button>
+          <button type="button" class="secondary" data-workflow-action="load-spec">刷新 Spec</button>
+          <button type="button" data-workflow-action="save-draft" ${state.workflowEditMode ? "" : "disabled"}>保存草稿</button>
+          <button type="button" data-workflow-action="create-proposal" ${state.workflowEditMode ? "" : "disabled"}>生成提案</button>
+          <button type="button" class="danger" data-workflow-action="apply-proposal" ${proposal?.proposal_id ? "" : "disabled"}>批准应用</button>
+        </div>
+      </header>
+      ${renderWorkflowValidation(validation)}
+      ${
+        state.workflowEditMode
+          ? `
+        <div class="workflow-editor-toolbar">
+          <button type="button" data-workflow-action="add-node">添加节点</button>
+          <button type="button" data-workflow-action="add-domain-review">添加领域审查节点</button>
+          <button type="button" data-workflow-action="add-edge">添加连线</button>
+          <button type="button" class="danger" data-workflow-action="delete-selected" ${selected ? "" : "disabled"}>删除所选</button>
+        </div>
+        ${renderWorkflowObjectEditor(spec, selected, protectedNodes)}
+      `
+          : `<p class="empty">进入编辑模式后，可以在图上选择节点或连线，修改 Agent、工作内容、门禁、规划化交付和连接关系。</p>`
+      }
+      ${proposal ? renderWorkflowProposal(proposal) : ""}
+    </article>
+  `;
+}
+
+function renderWorkflowValidation(validation) {
+  const errors = validation.errors || [];
+  const warnings = validation.warnings || [];
+  const requiresCode = validation.requires_code || [];
+  if (!errors.length && !warnings.length && !requiresCode.length) {
+    return `<p class="mono">校验: workflow spec 可运行。</p>`;
+  }
+  return `
+    <div class="workflow-validation">
+      ${errors.map((item) => `<p class="error">错误: ${escapeHtml(item)}</p>`).join("")}
+      ${requiresCode.map((item) => `<p class="warn">需要代码: ${escapeHtml(item)}</p>`).join("")}
+      ${warnings.map((item) => `<p class="warn">提醒: ${escapeHtml(item)}</p>`).join("")}
+    </div>
+  `;
+}
+
+function renderWorkflowObjectEditor(spec, selection, protectedNodes) {
+  if (!selection) return `<p class="empty">点击图上的节点或连线后，这里会显示可编辑属性。</p>`;
+  if (selection.kind === "edge") {
+    const edge = (spec.edges || []).find(
+      (item) =>
+        item.id === selection.id ||
+        (item.from === selection.from && item.to === selection.to && (item.type || "flow") === selection.type),
+    );
+    return edge ? renderWorkflowEdgeEditor(spec, edge) : `<p class="empty">未找到所选连线。</p>`;
+  }
+  const node = (spec.nodes || []).find((item) => item.id === selection.id);
+  return node ? renderWorkflowNodeEditor(node, protectedNodes.has(node.id)) : `<p class="empty">未找到所选节点。</p>`;
+}
+
+function renderWorkflowNodeEditor(node, isProtected) {
+  return `
+    <div class="workflow-edit-grid" data-editor-kind="node">
+      <label>节点 ID<input id="workflowNodeId" value="${escapeHtml(node.id)}" ${isProtected ? "readonly" : ""}></label>
+      <label>显示名称<input id="workflowNodeLabel" value="${escapeHtml(node.label || "")}"></label>
+      <label>激活 Agent<input id="workflowNodeAgent" value="${escapeHtml(node.agent || "coordinator")}"></label>
+      <label>Handler 类型
+        <select id="workflowNodeHandlerKind">
+          ${["builtin", "plugin_tool"].map((item) => `<option value="${item}" ${item === node.handler_kind ? "selected" : ""}>${item}</option>`).join("")}
+        </select>
+      </label>
+      <label>Handler<input id="workflowNodeHandler" value="${escapeHtml(node.handler || node.id)}"></label>
+      <label class="checkbox-row"><input id="workflowNodeCheckpoint" type="checkbox" ${node.checkpoint ? "checked" : ""}> 检查点</label>
+      <label class="span-2">描述<input id="workflowNodeDescription" value="${escapeHtml(node.description || "")}"></label>
+      <label class="span-2">工作内容<textarea id="workflowNodeWork">${escapeHtml(node.work || "")}</textarea></label>
+      <label>输入契约<textarea id="workflowNodeInput">${escapeHtml(node.input_contract || "")}</textarea></label>
+      <label>输出契约<textarea id="workflowNodeOutput">${escapeHtml(node.output_contract || "")}</textarea></label>
+      <label>门禁策略 JSON<textarea id="workflowNodeGate">${escapeHtml(JSON.stringify(node.gate_policy || {}, null, 2))}</textarea></label>
+      <label>UI JSON<textarea id="workflowNodeUi">${escapeHtml(JSON.stringify(node.ui || {}, null, 2))}</textarea></label>
+      <div class="span-2 workflow-editor-actions">
+        <button type="button" data-workflow-action="save-node">更新节点</button>
+        <button type="button" class="danger" data-workflow-action="delete-selected" ${isProtected ? "disabled" : ""}>删除节点</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkflowEdgeEditor(spec, edge) {
+  const nodeOptions = (selected) =>
+    (spec.nodes || [])
+      .map((node) => `<option value="${escapeHtml(node.id)}" ${node.id === selected ? "selected" : ""}>${escapeHtml(node.id)}</option>`)
+      .join("");
+  return `
+    <div class="workflow-edit-grid" data-editor-kind="edge">
+      <label>连线 ID<input id="workflowEdgeId" value="${escapeHtml(edge.id || `${edge.from}->${edge.to}`)}"></label>
+      <label>类型<input id="workflowEdgeType" value="${escapeHtml(edge.type || "flow")}"></label>
+      <label>起点<select id="workflowEdgeFrom">${nodeOptions(edge.from)}</select></label>
+      <label>终点<select id="workflowEdgeTo">${nodeOptions(edge.to)}</select></label>
+      <label class="span-2">条件 / 标签<input id="workflowEdgeCondition" value="${escapeHtml(edge.condition || edge.label || "")}"></label>
+      <label class="checkbox-row"><input id="workflowEdgeReviewer" type="checkbox" ${edge.reviewer_required ? "checked" : ""}> 需要 Reviewer</label>
+      <label>交付契约 JSON<textarea id="workflowEdgeHandoff">${escapeHtml(JSON.stringify(edge.handoff_contract || {}, null, 2))}</textarea></label>
+      <label>门禁策略 JSON<textarea id="workflowEdgeGate">${escapeHtml(JSON.stringify(edge.gate_policy || {}, null, 2))}</textarea></label>
+      <label>规划契约 JSON<textarea id="workflowEdgePlanner">${escapeHtml(JSON.stringify(edge.planner_contract || {}, null, 2))}</textarea></label>
+      <div class="span-2 workflow-editor-actions">
+        <button type="button" data-workflow-action="save-edge">更新连线</button>
+        <button type="button" class="danger" data-workflow-action="delete-selected">删除连线</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkflowProposal(proposal) {
+  return `
+    <article class="proposal-preview">
+      <p><strong>待应用提案</strong> <span class="badge pending">${escapeHtml(proposal.proposal_id)}</span></p>
+      <p class="mono">draft_hash=${escapeHtml(proposal.draft_hash || "")} | files=${escapeHtml((proposal.modified_files || []).join(", "))}</p>
+      <pre class="mono artifact-json">${escapeHtml(proposal.diff_preview || "暂无 diff。")}</pre>
     </article>
   `;
 }
@@ -1103,6 +1308,308 @@ function renderEventsTab(target, payload) {
     : `<p class="empty">暂无事件。</p>`;
 }
 
+function editableWorkflowSpec(payload = state.payload || {}) {
+  const specPayload = state.workflowSpecPayload || {};
+  return deepClone(specPayload.draft || specPayload.spec || workflowSpecFromRuntime(payload.workflow || {}));
+}
+
+function workflowSpecFromRuntime(workflow) {
+  const nodes = workflow.nodes || [];
+  return {
+    version: "1.0",
+    name: workflow.spec?.name || "runtime-workflow",
+    revision: workflow.spec?.revision || "runtime",
+    start_node: workflow.spec?.start_node || nodes[0]?.id || "intake",
+    terminal_nodes: workflow.spec?.terminal_nodes || ["respond"],
+    protected_nodes: nodes.map((node) => node.id),
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      label: node.label || workflowNodeLabel(node.id),
+      agent: node.agent || "coordinator",
+      description: node.description || "",
+      work: node.work || node.description || "",
+      input_contract: node.input || "",
+      output_contract: node.output || "",
+      handler_kind: node.handler_kind || "builtin",
+      handler: node.handler || node.id,
+      checkpoint: Boolean(node.checkpoint),
+      gate_policy: node.gate_policy || {},
+      ui: node.ui || {},
+    })),
+    edges: (workflow.edges || []).map((edge) => ({
+      id: edge.id || `${edge.from}->${edge.to}`,
+      from: edge.from,
+      to: edge.to,
+      type: edge.type || "flow",
+      condition: edge.condition || edge.label || "",
+      handoff_contract: edge.handoff_contract || {},
+      gate_policy: edge.gate_policy || {},
+      planner_contract: edge.planner_contract || {},
+      reviewer_required: Boolean(edge.reviewer_required),
+    })),
+  };
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value || {}));
+}
+
+async function loadWorkflowSpec({ render = false } = {}) {
+  state.workflowSpecPayload = await api("/api/workflow/spec");
+  if (render && state.payload) renderStatus(state.payload);
+  return state.workflowSpecPayload;
+}
+
+function setWorkflowDraft(spec) {
+  state.workflowSpecPayload = state.workflowSpecPayload || {};
+  state.workflowSpecPayload.draft = spec;
+  state.workflowSpecPayload.validation = state.workflowSpecPayload.validation || { ok: false, errors: [], warnings: ["草稿尚未保存校验"], requires_code: [] };
+  if (state.payload) renderStatus(state.payload);
+}
+
+function updateSelectedWorkflowObject(spec) {
+  const selection = state.selectedWorkflowElement;
+  if (!selection) return spec;
+  if (selection.kind === "edge") return updateSelectedWorkflowEdge(spec, selection);
+  return updateSelectedWorkflowNode(spec, selection);
+}
+
+function updateSelectedWorkflowNode(spec, selection) {
+  const index = (spec.nodes || []).findIndex((node) => node.id === selection.id);
+  if (index < 0 || !$("workflowNodeId")) return spec;
+  const previousId = spec.nodes[index].id;
+  const nextId = $("workflowNodeId").value.trim() || previousId;
+  const node = {
+    ...spec.nodes[index],
+    id: nextId,
+    label: $("workflowNodeLabel").value.trim(),
+    agent: $("workflowNodeAgent").value.trim() || "coordinator",
+    description: $("workflowNodeDescription").value.trim(),
+    work: $("workflowNodeWork").value.trim(),
+    input_contract: $("workflowNodeInput").value.trim(),
+    output_contract: $("workflowNodeOutput").value.trim(),
+    handler_kind: $("workflowNodeHandlerKind").value,
+    handler: $("workflowNodeHandler").value.trim() || nextId,
+    checkpoint: $("workflowNodeCheckpoint").checked,
+    gate_policy: parseJsonField("workflowNodeGate"),
+    ui: parseJsonField("workflowNodeUi"),
+  };
+  spec.nodes[index] = node;
+  if (previousId !== nextId) {
+    spec.edges = (spec.edges || []).map((edge) => ({
+      ...edge,
+      from: edge.from === previousId ? nextId : edge.from,
+      to: edge.to === previousId ? nextId : edge.to,
+    }));
+    spec.protected_nodes = (spec.protected_nodes || []).map((id) => (id === previousId ? nextId : id));
+    spec.start_node = spec.start_node === previousId ? nextId : spec.start_node;
+    spec.terminal_nodes = (spec.terminal_nodes || []).map((id) => (id === previousId ? nextId : id));
+    state.selectedWorkflowElement = { kind: "node", id: nextId };
+  }
+  return spec;
+}
+
+function updateSelectedWorkflowEdge(spec, selection) {
+  const index = (spec.edges || []).findIndex(
+    (edge) =>
+      edge.id === selection.id ||
+      (edge.from === selection.from && edge.to === selection.to && (edge.type || "flow") === selection.type),
+  );
+  if (index < 0 || !$("workflowEdgeId")) return spec;
+  const edge = {
+    ...spec.edges[index],
+    id: $("workflowEdgeId").value.trim() || `${$("workflowEdgeFrom").value}->${$("workflowEdgeTo").value}`,
+    from: $("workflowEdgeFrom").value,
+    to: $("workflowEdgeTo").value,
+    type: $("workflowEdgeType").value.trim() || "flow",
+    condition: $("workflowEdgeCondition").value.trim(),
+    reviewer_required: $("workflowEdgeReviewer").checked,
+    handoff_contract: parseJsonField("workflowEdgeHandoff"),
+    gate_policy: parseJsonField("workflowEdgeGate"),
+    planner_contract: parseJsonField("workflowEdgePlanner"),
+  };
+  spec.edges[index] = edge;
+  state.selectedWorkflowElement = { kind: "edge", id: edge.id, from: edge.from, to: edge.to, type: edge.type };
+  return spec;
+}
+
+function parseJsonField(id) {
+  const raw = $(id)?.value.trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${id} 不是合法 JSON: ${error.message}`);
+  }
+}
+
+function addWorkflowNode(kind = "generic") {
+  const spec = editableWorkflowSpec();
+  const id = nextWorkflowNodeId(spec, kind === "domain_review" ? "domain_review" : "custom_node");
+  const node = {
+    id,
+    label: kind === "domain_review" ? "领域审查" : "新节点",
+    agent: kind === "domain_review" ? "critic" : "coordinator",
+    description: kind === "domain_review" ? "领域事实与交付质量审查" : "自定义工作流节点",
+    work: kind === "domain_review" ? "审查领域事实、证据绑定和交付质量。" : "描述这个节点负责的工作。",
+    input_contract: kind === "domain_review" ? "答案草案" : "上游交付",
+    output_contract: kind === "domain_review" ? "领域审查记录" : "下游交付",
+    handler_kind: "builtin",
+    handler: kind === "domain_review" ? "review_note" : "passthrough",
+    checkpoint: kind === "domain_review",
+    gate_policy: {},
+    ui: {},
+  };
+  const insertAt = Math.max(0, (spec.nodes || []).findIndex((item) => item.id === "evidence_audit"));
+  spec.nodes.splice(insertAt >= 0 ? insertAt : spec.nodes.length, 0, node);
+  if (kind === "domain_review") {
+    spec.edges = (spec.edges || []).filter((edge) => !(edge.from === "reason" && edge.to === "evidence_audit"));
+    spec.edges.push({
+      id: "reason_to_domain_review",
+      from: "reason",
+      to: id,
+      type: "flow",
+      condition: "draft ready",
+      handoff_contract: { payload: "answer_draft + evidence_context" },
+      gate_policy: {},
+      planner_contract: { required_output: "domain_review_notes" },
+      reviewer_required: true,
+    });
+    spec.edges.push({
+      id: "domain_review_to_evidence_audit",
+      from: id,
+      to: "evidence_audit",
+      type: "flow",
+      condition: "review complete",
+      handoff_contract: { payload: "domain_review_notes" },
+      gate_policy: {},
+      planner_contract: {},
+      reviewer_required: false,
+    });
+  }
+  state.selectedWorkflowElement = { kind: "node", id };
+  setWorkflowDraft(spec);
+}
+
+function addWorkflowEdge() {
+  const spec = editableWorkflowSpec();
+  const nodes = spec.nodes || [];
+  if (nodes.length < 2) return;
+  const from = state.selectedWorkflowElement?.kind === "node" ? state.selectedWorkflowElement.id : nodes[0].id;
+  const to = nodes.find((node) => node.id !== from && node.id === "respond")?.id || nodes[nodes.length - 1].id;
+  const id = nextWorkflowEdgeId(spec, `${from}_to_${to}`);
+  const edge = {
+    id,
+    from,
+    to,
+    type: "flow",
+    condition: "manual handoff",
+    handoff_contract: {},
+    gate_policy: {},
+    planner_contract: {},
+    reviewer_required: false,
+  };
+  spec.edges.push(edge);
+  state.selectedWorkflowElement = { kind: "edge", id, from, to, type: "flow" };
+  setWorkflowDraft(spec);
+}
+
+function deleteSelectedWorkflowObject() {
+  const selection = state.selectedWorkflowElement;
+  if (!selection) return;
+  const spec = editableWorkflowSpec();
+  if (selection.kind === "edge") {
+    spec.edges = (spec.edges || []).filter(
+      (edge) =>
+        !(
+          edge.id === selection.id ||
+          (edge.from === selection.from && edge.to === selection.to && (edge.type || "flow") === selection.type)
+        ),
+    );
+    state.selectedWorkflowElement = null;
+    setWorkflowDraft(spec);
+    return;
+  }
+  if ((spec.protected_nodes || []).includes(selection.id)) {
+    appendMessage("agent", `受保护节点 ${selection.id} 不能删除。`);
+    return;
+  }
+  spec.nodes = (spec.nodes || []).filter((node) => node.id !== selection.id);
+  spec.edges = (spec.edges || []).filter((edge) => edge.from !== selection.id && edge.to !== selection.id);
+  state.selectedWorkflowElement = null;
+  setWorkflowDraft(spec);
+}
+
+function nextWorkflowNodeId(spec, base) {
+  const ids = new Set((spec.nodes || []).map((node) => node.id));
+  if (!ids.has(base)) return base;
+  let index = 2;
+  while (ids.has(`${base}_${index}`)) index += 1;
+  return `${base}_${index}`;
+}
+
+function nextWorkflowEdgeId(spec, base) {
+  const ids = new Set((spec.edges || []).map((edge) => edge.id));
+  if (!ids.has(base)) return base;
+  let index = 2;
+  while (ids.has(`${base}_${index}`)) index += 1;
+  return `${base}_${index}`;
+}
+
+async function saveWorkflowDraft() {
+  const spec = updateSelectedWorkflowObject(editableWorkflowSpec());
+  const payload = await api("/api/workflow/draft", { method: "POST", body: JSON.stringify({ spec }) });
+  state.workflowSpecPayload = { ...(state.workflowSpecPayload || {}), draft: payload.spec, validation: payload.validation };
+  renderStatus(state.payload || {});
+}
+
+async function createWorkflowProposal() {
+  await saveWorkflowDraft();
+  state.workflowProposal = await api("/api/workflow/proposal", { method: "POST", body: JSON.stringify({}) });
+  renderStatus(state.payload || {});
+}
+
+async function applyWorkflowProposal() {
+  if (!state.workflowProposal?.proposal_id) return;
+  const result = await api("/api/workflow/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      proposal_id: state.workflowProposal.proposal_id,
+      approved: true,
+      approved_by: "web-debugger",
+    }),
+  });
+  state.workflowProposal = null;
+  state.workflowSpecPayload = result.workflow;
+  state.workflowEditMode = false;
+  await refreshStatus();
+}
+
+async function handleWorkflowEditorAction(action) {
+  try {
+    if (action === "load-spec") return loadWorkflowSpec({ render: true });
+    if (action === "toggle-edit") {
+      state.workflowEditMode = !state.workflowEditMode;
+      if (!state.workflowSpecPayload) await loadWorkflowSpec();
+      renderStatus(state.payload || {});
+      return;
+    }
+    if (action === "add-node") return addWorkflowNode();
+    if (action === "add-domain-review") return addWorkflowNode("domain_review");
+    if (action === "add-edge") return addWorkflowEdge();
+    if (action === "delete-selected") return deleteSelectedWorkflowObject();
+    if (action === "save-node" || action === "save-edge") {
+      setWorkflowDraft(updateSelectedWorkflowObject(editableWorkflowSpec()));
+      return;
+    }
+    if (action === "save-draft") return saveWorkflowDraft();
+    if (action === "create-proposal") return createWorkflowProposal();
+    if (action === "apply-proposal") return applyWorkflowProposal();
+  } catch (error) {
+    appendMessage("agent", `工作流编辑错误: ${error.message}`);
+  }
+}
+
 function appendMessage(role, text) {
   const node = document.createElement("article");
   node.className = `message ${role}`;
@@ -1112,7 +1619,8 @@ function appendMessage(role, text) {
 }
 
 async function refreshStatus() {
-  renderStatus(await api("/api/status"));
+  const [payload] = await Promise.all([api("/api/status"), loadWorkflowSpec()]);
+  renderStatus(payload);
 }
 
 async function waitForRunCompletion(question) {
@@ -1171,6 +1679,12 @@ document.querySelectorAll(".tab").forEach((button) => {
 
 $("chatForm").addEventListener("submit", sendMessage);
 $("refreshButton").addEventListener("click", refreshStatus);
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-workflow-action]");
+  if (!button) return;
+  event.preventDefault();
+  handleWorkflowEditorAction(button.dataset.workflowAction);
+});
 
 refreshStatus().catch((error) => appendMessage("agent", `状态加载失败: ${error.message}`));
 

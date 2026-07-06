@@ -21,6 +21,11 @@ from reasoning_agent_template.models import (
     utc_now,
 )
 from reasoning_agent_template.risk import classify_evidence_requirement
+from reasoning_agent_template.workflow_spec import (
+    BUILTIN_STAGE_HANDLERS,
+    WorkflowNodeSpec,
+    load_workflow_spec,
+)
 
 
 STAGES = [
@@ -95,30 +100,36 @@ class TemplateCoordinator:
             min_evidence_by_risk=dict(config.gates.get("min_evidence_by_risk", {})),
             approval_required_actions=set(config.gates.get("approval_required_actions", [])),
         )
+        self.workflow_spec = load_workflow_spec(self.workspace_root, self.config.runtime)
+        validation = self.workflow_spec.validate(known_builtin_handlers=BUILTIN_STAGE_HANDLERS)
+        if validation.errors or validation.requires_code:
+            details = [*validation.errors, *validation.requires_code]
+            raise ValueError("workflow spec is not runnable: " + "; ".join(details))
 
     def run(self, user_goal: str, *, routing_decision: dict | None = None) -> WorkflowResult:
         state = AgentState(user_goal=user_goal)
         if routing_decision:
             state.routing_decision = dict(routing_decision)
-        for stage in STAGES:
+        for node in self.workflow_spec.execution_nodes():
+            stage = node.id
             started = perf_counter()
             state.current_stage = stage
             state.stage_trace.append(stage)
             state.stage_events.append(
                 {
                     "time": utc_now(),
-                    "agent": STAGE_AGENTS.get(stage, "coordinator"),
+                    "agent": node.agent,
                     "stage": stage,
                     "kind": "stage_started",
                     "message": f"{stage} started",
                 }
             )
             self._emit_progress(state, state.stage_events[-1])
-            getattr(self, f"_{stage}")(state)
+            self._run_node(node, state)
             state.stage_events.append(
                 {
                     "time": utc_now(),
-                    "agent": STAGE_AGENTS.get(stage, "coordinator"),
+                    "agent": node.agent,
                     "stage": stage,
                     "kind": "stage_completed",
                     "duration_ms": round((perf_counter() - started) * 1000, 2),
@@ -137,6 +148,19 @@ class TemplateCoordinator:
     def _emit_progress(self, state: AgentState, event: dict[str, Any]) -> None:
         if self.event_callback is not None:
             self.event_callback(state, event)
+
+    def _run_node(self, node: WorkflowNodeSpec, state: AgentState) -> None:
+        if node.handler_kind == "plugin_tool":
+            self._plugin_tool_node(node, state)
+            return
+        handler = getattr(self, f"_{node.handler}", None)
+        if handler is None:
+            raise ValueError(f"workflow node {node.id} uses unknown builtin handler: {node.handler}")
+        handler(state)
+
+    def _plugin_tool_node(self, node: WorkflowNodeSpec, state: AgentState) -> None:
+        state.action_results.append(f"plugin_tool node {node.id} requested handler {node.handler}")
+        state.verification_notes.append(f"plugin_tool node {node.id} has no local executor")
 
     def _intake(self, state: AgentState) -> None:
         if state.routing_decision:
@@ -207,6 +231,12 @@ class TemplateCoordinator:
             "保留状态机和门禁遥测。",
             "不写入长期记忆或技能。",
         ]
+
+    def _passthrough(self, state: AgentState) -> None:
+        state.action_results.append(f"{state.current_stage} passthrough completed")
+
+    def _review_note(self, state: AgentState) -> None:
+        state.verification_notes.append(f"{state.current_stage} review completed")
 
     def _retrieve(self, state: AgentState) -> None:
         if state.evidence_mode != "required":

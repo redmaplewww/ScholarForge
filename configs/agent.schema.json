@@ -41,7 +41,16 @@
     "runtime": {
       "type": "object",
       "properties": {
-        "prefer_deepagents": { "type": "boolean" }
+        "prefer_deepagents": { "type": "boolean" },
+        "workflow_spec": { "type": "string" },
+        "workflow_draft": { "type": "string" },
+        "workflow_proposal_dir": { "type": "string" },
+        "code_modifier": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string" }
+          }
+        }
       }
     }
   }

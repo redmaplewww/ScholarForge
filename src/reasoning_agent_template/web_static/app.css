@@ -585,6 +585,122 @@ button:hover {
   overflow: auto;
 }
 
+.workflow-editor {
+  border-left: 3px solid var(--teal);
+}
+
+.workflow-editor-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.workflow-editor-actions,
+.workflow-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.workflow-editor button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  background: #f7fbfa;
+  color: var(--ink);
+  font-weight: 760;
+}
+
+.workflow-editor button.secondary {
+  background: #fff;
+}
+
+.workflow-editor button.danger {
+  border-color: #fecaca;
+  background: #fff5f5;
+  color: #991b1b;
+}
+
+.workflow-editor button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.workflow-validation {
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: #fffdf7;
+}
+
+.workflow-validation p {
+  margin: 3px 0;
+}
+
+.workflow-validation .error {
+  color: #991b1b;
+}
+
+.workflow-validation .warn {
+  color: #92400e;
+}
+
+.workflow-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.workflow-edit-grid label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workflow-edit-grid input,
+.workflow-edit-grid select,
+.workflow-edit-grid textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px;
+}
+
+.workflow-edit-grid textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.workflow-edit-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.workflow-edit-grid .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-edit-grid .checkbox-row input {
+  width: auto;
+}
+
+.proposal-preview {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: #fbfcfb;
+}
+
 .tabs {
   display: flex;
   flex-wrap: wrap;

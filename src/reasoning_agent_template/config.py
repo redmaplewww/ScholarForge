@@ -72,7 +72,13 @@ class AgentConfig:
                 "direct_mutation_allowed": False,
                 "approval_required": True,
             },
-            runtime={"prefer_deepagents": False},
+            runtime={
+                "prefer_deepagents": False,
+                "workflow_spec": "configs/workflows/default.workflow.json",
+                "workflow_draft": "configs/workflows/default.workflow.draft.json",
+                "workflow_proposal_dir": "configs/workflows/proposals",
+                "code_modifier": {"mode": "local_spec"},
+            },
             workspace_root=Path(workspace_root),
         )
 

@@ -23,6 +23,7 @@ from reasoning_agent_template.models import AgentState, stable_hash, utc_now
 from reasoning_agent_template.risk import classify_evidence_requirement, is_explicit_evidence_request
 from reasoning_agent_template.skills import SkillRegistry
 from reasoning_agent_template.workflow import TemplateCoordinator
+from reasoning_agent_template.workflow_spec import WorkflowNodeSpec, WorkflowSpec, WorkflowSpecStore
 
 
 AGENT_ROLES = [
@@ -90,6 +91,7 @@ class MultiAgentOrchestrator:
         self.config = config
         self.workspace_root = Path(workspace_root)
         self.llm_client_factory = llm_client_factory
+        self.workflow_store = WorkflowSpecStore(self.workspace_root, self.config.runtime)
         self.short_term_memories: dict[str, ShortTermConversationMemory] = {}
         self._status_lock = RLock()
         self._active_run: dict[str, Any] | None = None
@@ -601,10 +603,16 @@ class MultiAgentOrchestrator:
         active_stage: str,
         hint: str,
     ) -> list[dict[str, Any]]:
-        agents = self._agents(state) if state is not None else [
-            {"name": name, "description": description, "status": "idle", "active": False, "current_stage": ""}
-            for name, description in AGENT_ROLES
-        ]
+        if state is not None:
+            agents = self._agents(state)
+        else:
+            role_descriptions = {name: description for name, description in AGENT_ROLES}
+            for node in self._workflow_spec().nodes:
+                role_descriptions.setdefault(node.agent, f"Workflow agent for {node.label or node.id}.")
+            agents = [
+                {"name": name, "description": description, "status": "idle", "active": False, "current_stage": ""}
+                for name, description in role_descriptions.items()
+            ]
         for item in agents:
             if item["name"] == active_agent:
                 item["status"] = "active"
@@ -689,18 +697,63 @@ class MultiAgentOrchestrator:
         }
 
     def workflow_status(self) -> dict[str, Any]:
+        spec = self._workflow_spec()
         return {
             "status": "idle",
             "active": False,
             "current": "idle",
             "variant": "idle",
-            "nodes": [
-                self._workflow_node(stage, agent, description, input_name, output_name)
-                for stage, agent, description, input_name, output_name in WORKFLOW_DEFINITIONS
-            ],
-            "edges": copy.deepcopy(WORKFLOW_CONTROL_EDGES),
-            "checkpoints": list(WORKFLOW_CHECKPOINTS),
+            "spec": {
+                "name": spec.name,
+                "revision": spec.revision,
+                "version": spec.version,
+                "start_node": spec.start_node,
+                "terminal_nodes": list(spec.terminal_nodes),
+            },
+            "nodes": [self._workflow_node_from_spec(node) for node in spec.nodes],
+            "edges": self._workflow_edges(spec),
+            "checkpoints": spec.checkpoints(),
         }
+
+    def _workflow_spec(self) -> WorkflowSpec:
+        return self.workflow_store.load()
+
+    def _workflow_edges(self, spec: WorkflowSpec) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": edge.id,
+                "from": edge.from_node,
+                "to": edge.to_node,
+                "type": edge.type,
+                "label": edge.condition,
+                "condition": edge.condition,
+                "handoff_contract": dict(edge.handoff_contract),
+                "gate_policy": dict(edge.gate_policy),
+                "planner_contract": dict(edge.planner_contract),
+                "reviewer_required": edge.reviewer_required,
+            }
+            for edge in spec.edges
+        ]
+
+    def _workflow_node_from_spec(
+        self,
+        node: WorkflowNodeSpec,
+        *,
+        state: AgentState | None = None,
+        completed: set[str] | None = None,
+        durations: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        return self._workflow_node(
+            node.id,
+            node.agent,
+            node.description,
+            node.input_contract,
+            node.output_contract,
+            node_spec=node,
+            state=state,
+            completed=completed,
+            durations=durations,
+        )
 
     def _workflow_node(
         self,
@@ -710,6 +763,7 @@ class MultiAgentOrchestrator:
         input_name: str,
         output_name: str,
         *,
+        node_spec: WorkflowNodeSpec | None = None,
         state: AgentState | None = None,
         completed: set[str] | None = None,
         durations: dict[str, float] | None = None,
@@ -737,10 +791,16 @@ class MultiAgentOrchestrator:
             "effective_status": effective_status,
             "work_done": work_done,
             "skip_reason": skip_reason,
-            "checkpoint": stage in WORKFLOW_CHECKPOINTS,
+            "checkpoint": node_spec.checkpoint if node_spec is not None else stage in WORKFLOW_CHECKPOINTS,
             "observed": observed,
             "duration_ms": durations.get(stage),
             "artifacts": self._workflow_artifacts(stage, state),
+            "label": node_spec.label if node_spec is not None else stage,
+            "work": node_spec.work if node_spec is not None else description,
+            "handler_kind": node_spec.handler_kind if node_spec is not None else "builtin",
+            "handler": node_spec.handler if node_spec is not None else stage,
+            "gate_policy": dict(node_spec.gate_policy) if node_spec is not None else {},
+            "ui": dict(node_spec.ui) if node_spec is not None else {},
         }
 
     def _agents(self, state: AgentState) -> list[dict[str, Any]]:
@@ -754,6 +814,9 @@ class MultiAgentOrchestrator:
             "memory": len(state.pending_consolidation),
             "evolver": 0,
         }
+        role_descriptions = {name: description for name, description in AGENT_ROLES}
+        for node in self._workflow_spec().nodes:
+            role_descriptions.setdefault(node.agent, f"Workflow agent for {node.label or node.id}.")
         return [
             {
                 "name": name,
@@ -764,7 +827,7 @@ class MultiAgentOrchestrator:
                 "metric": metrics.get(name, 0),
                 "last_event": self._last_event_for(name, state),
             }
-            for name, description in AGENT_ROLES
+            for name, description in role_descriptions.items()
         ]
 
     def _state_machine(self, state: AgentState) -> dict[str, Any]:
@@ -786,29 +849,33 @@ class MultiAgentOrchestrator:
         }
 
     def _workflow(self, state: AgentState) -> dict[str, Any]:
+        spec = self._workflow_spec()
         trace = list(state.stage_trace)
         completed = set(trace)
         durations = self._stage_durations(state)
         return {
-            "status": "completed" if trace and trace[-1] == "respond" else "running",
+            "status": "completed" if trace and trace[-1] in spec.terminal_nodes else "running",
             "active": False,
             "current": state.current_stage,
             "variant": state.workflow_variant,
+            "spec": {
+                "name": spec.name,
+                "revision": spec.revision,
+                "version": spec.version,
+                "start_node": spec.start_node,
+                "terminal_nodes": list(spec.terminal_nodes),
+            },
             "nodes": [
-                self._workflow_node(
-                    stage,
-                    agent,
-                    description,
-                    input_name,
-                    output_name,
+                self._workflow_node_from_spec(
+                    node,
                     state=state,
                     completed=completed,
                     durations=durations,
                 )
-                for stage, agent, description, input_name, output_name in WORKFLOW_DEFINITIONS
+                for node in spec.nodes
             ],
-            "edges": copy.deepcopy(WORKFLOW_CONTROL_EDGES),
-            "checkpoints": list(WORKFLOW_CHECKPOINTS),
+            "edges": self._workflow_edges(spec),
+            "checkpoints": spec.checkpoints(),
         }
 
     def _workflow_effect(self, stage: str, state: AgentState, *, completed: set[str]) -> dict[str, Any]:
@@ -902,15 +969,36 @@ class MultiAgentOrchestrator:
             "respond": self._respond_artifacts,
         }
         builder = artifacts_by_stage.get(stage)
-        artifacts = builder(state) if builder else empty
+        artifacts = builder(state) if builder else self._generic_stage_artifacts(stage, state)
         artifacts.setdefault("actual_input", {})
         artifacts.setdefault("actual_output", {})
         artifacts.setdefault("process", [])
         artifacts.setdefault("handoff", self._stage_handoff(stage))
         return artifacts
 
+    def _generic_stage_artifacts(self, stage: str, state: AgentState) -> dict[str, Any]:
+        node = self._workflow_spec().node_map().get(stage)
+        return {
+            "actual_input": {
+                "input_contract": node.input_contract if node else "",
+                "current_answer": state.answer,
+                "gate_decisions": [decision.to_dict() for decision in state.gate_decisions],
+            },
+            "actual_output": {
+                "output_contract": node.output_contract if node else "",
+                "handler_kind": node.handler_kind if node else "builtin",
+                "handler": node.handler if node else stage,
+                "action_results": list(state.action_results),
+                "verification_notes": list(state.verification_notes),
+            },
+            "process": self._stage_event_messages(state, stage),
+            "handoff": self._stage_handoff(stage),
+        }
+
     def _stage_handoff(self, stage: str) -> dict[str, Any]:
-        order = [definition[0] for definition in WORKFLOW_DEFINITIONS]
+        spec = self._workflow_spec()
+        order = spec.node_ids()
+        stage_agents = spec.stage_agents()
         index = order.index(stage) if stage in order else -1
         previous_stage = order[index - 1] if index > 0 else None
         next_stage = order[index + 1] if 0 <= index < len(order) - 1 else None
@@ -918,9 +1006,9 @@ class MultiAgentOrchestrator:
             "from": previous_stage,
             "to": stage,
             "next": next_stage,
-            "from_agent": STAGE_AGENTS.get(previous_stage or "", ""),
-            "agent": STAGE_AGENTS.get(stage, "coordinator"),
-            "next_agent": STAGE_AGENTS.get(next_stage or "", ""),
+            "from_agent": stage_agents.get(previous_stage or "", ""),
+            "agent": stage_agents.get(stage, "coordinator"),
+            "next_agent": stage_agents.get(next_stage or "", ""),
         }
 
     def _intake_artifacts(self, state: AgentState) -> dict[str, Any]:
