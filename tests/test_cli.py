@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -104,6 +105,65 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr)
         self.assertIn("OK", stderr)
+
+    def test_rag_eval_reports_recall_and_index_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge_dir = root / "knowledge"
+            knowledge_dir.mkdir()
+            (knowledge_dir / "target.md").write_text(
+                "HNSW vector search uses graph layers for approximate nearest neighbor retrieval.",
+                encoding="utf-8",
+            )
+            config_path = root / "agent.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "knowledge": {
+                            "directory": "knowledge",
+                            "index_type": "hybrid",
+                            "top_k": 5,
+                            "min_score": 0.0,
+                            "chunk_size": 1400,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cases_path = root / "cases.json"
+            cases_path.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "id": "hnsw",
+                                "query": "HNSW nearest neighbor graph retrieval",
+                                "expected_sources": ["knowledge/target.md"],
+                                "tags": ["direct"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, stdout, stderr = self.run_cli(
+                [
+                    "--config",
+                    str(config_path),
+                    "--workspace",
+                    str(root),
+                    "rag-eval",
+                    "--cases",
+                    str(cases_path),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(code, 0, stderr)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["index"]["chunk_count"], 1)
+        self.assertEqual(payload["methods"]["hybrid"]["recall"]["recall@1"], 1.0)
 
 
 if __name__ == "__main__":

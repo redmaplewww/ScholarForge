@@ -9,6 +9,7 @@ from threading import RLock
 from time import perf_counter
 from typing import Any, Callable, Protocol
 
+from reasoning_agent_template.agents_spec import AgentsSpec, AgentsSpecStore
 from reasoning_agent_template.config import AgentConfig
 from reasoning_agent_template.evidence import EvidenceLedger
 from reasoning_agent_template.gates import GatePolicy
@@ -92,6 +93,7 @@ class MultiAgentOrchestrator:
         self.workspace_root = Path(workspace_root)
         self.llm_client_factory = llm_client_factory
         self.workflow_store = WorkflowSpecStore(self.workspace_root, self.config.runtime)
+        self.agents_store = AgentsSpecStore(self.workspace_root, self.config.runtime)
         self.short_term_memories: dict[str, ShortTermConversationMemory] = {}
         self._status_lock = RLock()
         self._active_run: dict[str, Any] | None = None
@@ -276,17 +278,9 @@ class MultiAgentOrchestrator:
             "rag": {
                 "query": message,
                 "count": len(result.state.retrieval_results),
-                "results": [
-                    {
-                        "source": chunk.source,
-                        "span": chunk.span,
-                        "score": chunk.score,
-                        "content_hash": chunk.content_hash,
-                        "evidence_id": chunk.evidence_id,
-                        "text": chunk.text,
-                    }
-                    for chunk in result.state.retrieval_results
-                ],
+                "methods": list(result.state.rag_methods),
+                "diagnostics": list(result.state.rag_diagnostics),
+                "results": [self._chunk_artifact(chunk) for chunk in result.state.retrieval_results],
             },
             "external_evidence": {
                 "query": message,
@@ -402,10 +396,7 @@ class MultiAgentOrchestrator:
                     "configured": DeepSeekChatClient.is_configured(self.config),
                 },
             },
-            "agents": [
-                {"name": name, "status": "idle", "description": description}
-                for name, description in AGENT_ROLES
-            ],
+            "agents": self._idle_agents(),
             "routing": {
                 "source": "idle",
                 "difficulty": "idle",
@@ -449,7 +440,7 @@ class MultiAgentOrchestrator:
                 "references": [],
                 "items": [],
             },
-            "rag": {"count": 0, "results": []},
+            "rag": {"count": 0, "methods": [], "diagnostics": [], "results": []},
             "external_evidence": {"count": 0, "attempted_sources": [], "diagnostics": [], "results": []},
             "gates": {"count": 0, "decisions": []},
             "memory": {
@@ -664,17 +655,9 @@ class MultiAgentOrchestrator:
         return {
             "query": query,
             "count": len(state.retrieval_results),
-            "results": [
-                {
-                    "source": chunk.source,
-                    "span": chunk.span,
-                    "score": chunk.score,
-                    "content_hash": chunk.content_hash,
-                    "evidence_id": chunk.evidence_id,
-                    "text": chunk.text,
-                }
-                for chunk in state.retrieval_results
-            ],
+            "methods": list(state.rag_methods),
+            "diagnostics": list(state.rag_diagnostics),
+            "results": [self._chunk_artifact(chunk) for chunk in state.retrieval_results],
         }
 
     def _external_monitor(self, state: AgentState, *, query: str) -> dict[str, Any]:
@@ -717,6 +700,9 @@ class MultiAgentOrchestrator:
 
     def _workflow_spec(self) -> WorkflowSpec:
         return self.workflow_store.load()
+
+    def _agents_spec(self) -> AgentsSpec:
+        return self.agents_store.load()
 
     def _workflow_edges(self, spec: WorkflowSpec) -> list[dict[str, Any]]:
         return [
@@ -814,20 +800,51 @@ class MultiAgentOrchestrator:
             "memory": len(state.pending_consolidation),
             "evolver": 0,
         }
-        role_descriptions = {name: description for name, description in AGENT_ROLES}
+        agents_spec = self._agents_spec()
+        role_descriptions = {agent.id: agent.description for agent in agents_spec.agents}
+        role_specs = agents_spec.agent_map()
         for node in self._workflow_spec().nodes:
             role_descriptions.setdefault(node.agent, f"Workflow agent for {node.label or node.id}.")
         return [
             {
                 "name": name,
+                "label": role_specs.get(name).label if name in role_specs else name,
                 "description": description,
                 "status": "completed" if name != "evolver" else "idle",
                 "active": False,
                 "current_stage": state.current_stage if name == "coordinator" else name,
                 "metric": metrics.get(name, 0),
                 "last_event": self._last_event_for(name, state),
+                "responsibilities": list(role_specs.get(name).responsibilities) if name in role_specs else [],
+                "model_role": role_specs.get(name).model_role if name in role_specs else "worker",
+                "tools": list(role_specs.get(name).tools) if name in role_specs else [],
+                "memory_access": list(role_specs.get(name).memory_access) if name in role_specs else [],
+                "workflow_nodes": list(role_specs.get(name).workflow_nodes) if name in role_specs else [],
+                "protected": name in agents_spec.protected_agents,
             }
             for name, description in role_descriptions.items()
+        ]
+
+    def _idle_agents(self) -> list[dict[str, Any]]:
+        agents_spec = self._agents_spec()
+        return [
+            {
+                "name": agent.id,
+                "label": agent.label,
+                "status": "idle",
+                "description": agent.description,
+                "active": False,
+                "current_stage": agent.id,
+                "metric": 0,
+                "last_event": "",
+                "responsibilities": list(agent.responsibilities),
+                "model_role": agent.model_role,
+                "tools": list(agent.tools),
+                "memory_access": list(agent.memory_access),
+                "workflow_nodes": list(agent.workflow_nodes),
+                "protected": agent.id in agents_spec.protected_agents,
+            }
+            for agent in agents_spec.agents
         ]
 
     def _state_machine(self, state: AgentState) -> dict[str, Any]:
@@ -1183,6 +1200,9 @@ class MultiAgentOrchestrator:
             "content_hash": chunk.content_hash,
             "evidence_id": chunk.evidence_id,
             "text": _excerpt(chunk.text, limit=1400),
+            "retrieval_method": getattr(chunk, "retrieval_method", "keyword"),
+            "score_breakdown": dict(getattr(chunk, "score_breakdown", {}) or {}),
+            "metadata": dict(getattr(chunk, "metadata", {}) or {}),
         }
 
     def _evidence_artifact(self, item: Any) -> dict[str, Any]:
@@ -1584,6 +1604,8 @@ class MultiAgentOrchestrator:
                 "span": chunk.span,
                 "score": chunk.score,
                 "evidence_id": chunk.evidence_id,
+                "retrieval_method": getattr(chunk, "retrieval_method", "keyword"),
+                "score_breakdown": dict(getattr(chunk, "score_breakdown", {}) or {}),
                 "text": chunk.text[:1200],
             }
             for chunk in state.retrieval_results

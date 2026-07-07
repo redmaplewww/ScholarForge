@@ -11,6 +11,7 @@ from typing import Sequence
 from reasoning_agent_template.config import load_agent_config
 from reasoning_agent_template.llm import ChatMessage, DeepSeekChatClient, LLMRequestError, MissingApiKeyError
 from reasoning_agent_template.multiagent import MultiAgentOrchestrator
+from reasoning_agent_template.rag_eval import evaluate_knowledge_base, format_markdown_report, load_cases
 from reasoning_agent_template.skills import SkillRegistry
 from reasoning_agent_template.web import serve
 
@@ -54,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--tests-dir", default="tests", help="Directory to discover tests from.")
     test.add_argument("--pattern", default="test*.py", help="Unittest discovery pattern.")
     test.set_defaults(handler=_cmd_test)
+
+    rag_eval = subparsers.add_parser("rag-eval", help="Evaluate local RAG recall across retrieval methods.")
+    rag_eval.add_argument("--cases", default="configs/rag_benchmark_cases.json", help="Path to RAG benchmark cases.")
+    rag_eval.add_argument("--report", default="", help="Optional markdown report output path.")
+    rag_eval.add_argument("--min-score", type=float, default=None, help="Override retrieval min_score.")
+    rag_eval.add_argument("--top-ks", default="1,3,5", help="Comma-separated K values.")
+    rag_eval.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    rag_eval.set_defaults(handler=_cmd_rag_eval)
 
     web = subparsers.add_parser("web", help="Start the local web chat and debug console.")
     web.add_argument("--host", default="127.0.0.1", help="Host to bind.")
@@ -152,6 +161,38 @@ def _cmd_test(args: argparse.Namespace) -> int:
     suite = unittest.defaultTestLoader.discover(args.tests_dir, pattern=args.pattern)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
+
+
+def _cmd_rag_eval(args: argparse.Namespace) -> int:
+    config = load_agent_config(Path(args.config))
+    workspace = Path(args.workspace)
+    knowledge_dir = Path(str(config.knowledge.get("directory", "knowledge")))
+    if not knowledge_dir.is_absolute():
+        knowledge_dir = workspace / knowledge_dir
+    cases_path = Path(args.cases)
+    if not cases_path.is_absolute():
+        cases_path = workspace / cases_path
+    top_ks = [int(item.strip()) for item in str(args.top_ks).split(",") if item.strip()]
+    min_score = float(config.knowledge.get("min_score", 0.0) if args.min_score is None else args.min_score)
+    payload = evaluate_knowledge_base(
+        knowledge_dir=knowledge_dir,
+        cases=load_cases(cases_path),
+        top_ks=top_ks,
+        min_score=min_score,
+        max_chunk_chars=int(config.knowledge.get("chunk_size", 1400)),
+    )
+    report = format_markdown_report(payload)
+    if args.report:
+        report_path = Path(args.report)
+        if not report_path.is_absolute():
+            report_path = workspace / report_path
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report + "\n", encoding="utf-8")
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    print(report)
+    return 0
 
 
 def _cmd_web(args: argparse.Namespace) -> int:

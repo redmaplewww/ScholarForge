@@ -11,3 +11,5 @@ openclaude/
 evidence/consolidation-proposals/
 configs/workflows/*.draft.json
 configs/workflows/proposals/
+configs/agents/*.draft.json
+configs/agents/proposals/

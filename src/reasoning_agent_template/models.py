@@ -54,6 +54,9 @@ class KnowledgeChunk:
     content_hash: str
     score: float
     evidence_id: str
+    retrieval_method: str = "keyword"
+    score_breakdown: dict[str, float] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,8 @@ class AgentState:
     evidence_sources: list[str] = field(default_factory=list)
     plan: list[str] = field(default_factory=list)
     retrieval_results: list[KnowledgeChunk] = field(default_factory=list)
+    rag_methods: list[str] = field(default_factory=list)
+    rag_diagnostics: list[dict[str, Any]] = field(default_factory=list)
     external_results: list[KnowledgeChunk] = field(default_factory=list)
     external_search_attempted: list[str] = field(default_factory=list)
     external_search_diagnostics: list[dict[str, Any]] = field(default_factory=list)

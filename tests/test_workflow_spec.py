@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from urllib import request
 
+from reasoning_agent_template.agents_spec import AgentsSpec, AgentsSpecStore
 from reasoning_agent_template.code_modifier import LocalWorkflowSpecCodeModifier
 from reasoning_agent_template.config import AgentConfig
 from reasoning_agent_template.workflow import TemplateCoordinator
@@ -13,6 +14,32 @@ from reasoning_agent_template.web import create_server
 
 
 class WorkflowSpecTests(unittest.TestCase):
+    def test_default_agents_spec_validates_and_protects_core_agents(self):
+        base = AgentsSpec.default()
+        data = base.to_dict()
+        data["agents"] = [agent for agent in data["agents"] if agent["id"] != "coordinator"]
+
+        validation = AgentsSpec.from_dict(data).validate(base=base, workflow_agent_ids={"coordinator", "planner"})
+
+        self.assertFalse(validation.ok)
+        self.assertTrue(any("protected agent cannot be deleted: coordinator" in item for item in validation.errors))
+
+    def test_local_code_modifier_applies_approved_agents_spec_only_inside_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = AgentsSpecStore(root)
+            spec = AgentsSpec.default()
+            store.save_draft(spec)
+            proposal = store.create_proposal(spec)
+
+            result = LocalWorkflowSpecCodeModifier(root).apply_agents_proposal(
+                proposal,
+                approved_by="tester",
+            )
+
+        self.assertEqual(result.status, "applied")
+        self.assertIn("configs/agents/default.agents.json", result.modified_files)
+
     def test_default_workflow_spec_validates_and_drives_existing_trace(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -157,6 +184,221 @@ class WorkflowSpecTests(unittest.TestCase):
         self.assertEqual(applied["status"], "applied")
         self.assertEqual(applied["workflow"]["spec"]["revision"], "api-test")
 
+    def test_configurator_compose_draft_proposal_and_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agent.yaml").write_text(
+                Path("agent.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (root / "knowledge").mkdir()
+            server = create_server(
+                host="127.0.0.1",
+                port=0,
+                config_path=root / "agent.yaml",
+                workspace_root=root,
+                llm_client_factory=lambda _config: _FakeConfiguratorClient(),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                spec_payload = _get_json(f"{base_url}/api/agents/spec")
+                self.assertTrue(spec_payload["validation"]["ok"])
+
+                composed = _post_json(
+                    f"{base_url}/api/configurator/compose",
+                    {"prompt": "/配置 我要一个材料学研究多 Agent，带领域研究员，并在推理后加入领域审查"},
+                )
+                proposal = _post_json(f"{base_url}/api/agents/proposal", {})
+                applied = _post_json(
+                    f"{base_url}/api/agents/apply",
+                    {"proposal_id": proposal["proposal_id"], "approved": True, "approved_by": "tester"},
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        configured = composed["agents"]
+        workflow_configured = composed["workflow"]
+        ids = {agent["id"] for agent in configured["spec"]["agents"]}
+        self.assertEqual(composed["status"], "completed")
+        self.assertEqual(composed["targets"], ["agents", "workflow"])
+        self.assertIn("配置助手已生成草稿", composed["answer"])
+        self.assertEqual(configured["source"], "deepseek")
+        self.assertIn("domain_researcher", ids)
+        self.assertTrue(configured["validation"]["ok"])
+        self.assertTrue(workflow_configured["validation"]["ok"])
+        self.assertTrue(any(node["id"] == "domain_review" for node in workflow_configured["spec"]["nodes"]))
+        self.assertEqual(applied["status"], "applied")
+        self.assertTrue(any(agent["id"] == "domain_researcher" for agent in applied["agents"]["spec"]["agents"]))
+
+    def test_configurator_honors_explicit_design_counts_without_deleting_scaffold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agent.yaml").write_text(
+                Path("agent.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (root / "knowledge").mkdir()
+            server = create_server(
+                host="127.0.0.1",
+                port=0,
+                config_path=root / "agent.yaml",
+                workspace_root=root,
+                llm_client_factory=lambda _config: _FakeConfiguratorClient(),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                composed = _post_json(
+                    f"{base_url}/api/configurator/compose",
+                    {"prompt": "/配置 生成 3 个 Agent 和 3-4 个节点，材料学研究用途"},
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        agents_spec = composed["agents"]["spec"]
+        workflow_spec = composed["workflow"]["spec"]
+        protected_agents = set(agents_spec["protected_agents"])
+        protected_nodes = set(workflow_spec["protected_nodes"])
+        design_agents = [
+            agent
+            for agent in agents_spec["agents"]
+            if agent["id"] not in protected_agents and not agent.get("ui", {}).get("builder_hidden")
+        ]
+        hidden_agents = [
+            agent for agent in agents_spec["agents"] if agent["id"] in protected_agents and agent.get("ui", {}).get("builder_hidden")
+        ]
+        design_nodes = [
+            node
+            for node in workflow_spec["nodes"]
+            if node["id"] not in protected_nodes and not node.get("ui", {}).get("builder_hidden")
+        ]
+        hidden_nodes = [
+            node for node in workflow_spec["nodes"] if node["id"] in protected_nodes and node.get("ui", {}).get("builder_hidden")
+        ]
+
+        self.assertEqual(composed["agents"]["summary"]["design_count"], 3)
+        self.assertEqual(composed["workflow"]["summary"]["design_count"], 4)
+        self.assertEqual(len(design_agents), 3)
+        self.assertEqual(len(design_nodes), 4)
+        self.assertGreaterEqual(len(hidden_agents), 1)
+        self.assertGreaterEqual(len(hidden_nodes), 1)
+        self.assertTrue(composed["agents"]["validation"]["ok"])
+        self.assertTrue(composed["workflow"]["validation"]["ok"])
+        self.assertIn("设计层 3 个", composed["answer"])
+        self.assertIn("设计层 4 个节点", composed["answer"])
+
+    def test_configurator_infers_small_design_for_simple_goals_without_explicit_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agent.yaml").write_text(
+                Path("agent.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (root / "knowledge").mkdir()
+            server = create_server(
+                host="127.0.0.1",
+                port=0,
+                config_path=root / "agent.yaml",
+                workspace_root=root,
+                llm_client_factory=lambda _config: _FakeConfiguratorClient(),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                composed = _post_json(
+                    f"{base_url}/api/configurator/compose",
+                    {"prompt": "/配置 做一个只回答常见问题的轻量客服 Agent"},
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        self.assertEqual(composed["builder_plan"]["scale"], "simple")
+        self.assertFalse(composed["builder_plan"]["explicit_agent_count"])
+        self.assertFalse(composed["builder_plan"]["explicit_node_count"])
+        self.assertEqual(composed["agents"]["summary"]["design_count"], 1)
+        self.assertEqual(composed["workflow"]["summary"]["design_count"], 2)
+        self.assertIn("规模判断: simple", composed["answer"])
+
+    def test_configurator_infers_larger_design_for_complex_goals_without_explicit_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agent.yaml").write_text(
+                Path("agent.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (root / "knowledge").mkdir()
+            server = create_server(
+                host="127.0.0.1",
+                port=0,
+                config_path=root / "agent.yaml",
+                workspace_root=root,
+                llm_client_factory=lambda _config: _FakeConfiguratorClient(),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                composed = _post_json(
+                    f"{base_url}/api/configurator/compose",
+                    {
+                        "prompt": "/配置 做一个材料学研究多 Agent，自动检索论文和 RAG，带证据门禁、reviewer 审查、长期记忆沉淀和自进化提案"
+                    },
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        self.assertEqual(composed["builder_plan"]["scale"], "complex")
+        self.assertGreaterEqual(composed["agents"]["summary"]["design_count"], 3)
+        self.assertGreaterEqual(composed["workflow"]["summary"]["design_count"], 4)
+        self.assertLessEqual(composed["agents"]["summary"]["design_count"], 4)
+        self.assertLessEqual(composed["workflow"]["summary"]["design_count"], 6)
+        self.assertIn("规模判断: complex", composed["answer"])
+
+    def test_configurator_replaces_prior_design_layer_without_stale_edges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agent.yaml").write_text(
+                Path("agent.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (root / "knowledge").mkdir()
+            server = create_server(
+                host="127.0.0.1",
+                port=0,
+                config_path=root / "agent.yaml",
+                workspace_root=root,
+                llm_client_factory=lambda _config: _FakeConfiguratorClient(),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                _post_json(
+                    f"{base_url}/api/configurator/compose",
+                    {"prompt": "/配置 生成 3 个 Agent 和 3-4 个节点，材料学研究用途"},
+                )
+                composed = _post_json(
+                    f"{base_url}/api/configurator/compose",
+                    {"prompt": "/配置 做一个只回答常见问题的轻量客服 Agent"},
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        workflow_spec = composed["workflow"]["spec"]
+        node_ids = {node["id"] for node in workflow_spec["nodes"]}
+        self.assertTrue(composed["workflow"]["validation"]["ok"], composed["workflow"]["validation"])
+        self.assertEqual(composed["workflow"]["summary"]["design_count"], 2)
+        self.assertTrue(all(edge["from"] in node_ids and edge["to"] in node_ids for edge in workflow_spec["edges"]))
+
 
 def _get_json(url: str):
     return json.loads(request.urlopen(url, timeout=10).read().decode("utf-8"))
@@ -166,6 +408,30 @@ def _post_json(url: str, body: dict):
     data = json.dumps(body).encode("utf-8")
     req = request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     return json.loads(request.urlopen(req, timeout=10).read().decode("utf-8"))
+
+
+class _FakeConfiguratorClient:
+    model = "fake-configurator"
+
+    def chat(self, messages, *, temperature, max_tokens):
+        data = AgentsSpec.default().to_dict()
+        data["revision"] = "fake-configurator"
+        data["agents"].append(
+            {
+                "id": "domain_researcher",
+                "label": "领域研究员",
+                "description": "检索材料学论文并形成证据候选。",
+                "responsibilities": ["论文检索", "证据筛选"],
+                "model_role": "worker",
+                "tools": ["external_search"],
+                "permissions": {},
+                "memory_access": ["long_term:read"],
+                "workflow_nodes": [],
+                "handoff_contract": {},
+                "ui": {},
+            }
+        )
+        return type("Result", (), {"content": json.dumps(data, ensure_ascii=False)})()
 
 
 if __name__ == "__main__":

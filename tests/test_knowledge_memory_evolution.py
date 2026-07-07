@@ -6,7 +6,7 @@ from pathlib import Path
 from reasoning_agent_template.evidence import EvidenceLedger
 from reasoning_agent_template.evolution import SelfEvolutionEngine
 from reasoning_agent_template.gates import GatePolicy
-from reasoning_agent_template.knowledge import LocalKnowledgeBase
+from reasoning_agent_template.knowledge import LocalKnowledgeBase, WikipediaKnowledgeSource
 from reasoning_agent_template.memory import LongTermMemoryStore
 
 
@@ -58,6 +58,138 @@ class KnowledgeMemoryEvolutionTests(unittest.TestCase):
             results = kb.retrieve("memory-only-vector-database-fact", top_k=3)
 
             self.assertEqual(results, [])
+
+    def test_hybrid_retrieval_supports_cross_lingual_semantic_matching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge_dir = root / "knowledge"
+            knowledge_dir.mkdir()
+            target = knowledge_dir / "hea.md"
+            target.write_text(
+                "High entropy alloy strength depends on solid solution strengthening, grain size, "
+                "precipitation hardening, dislocation density, phase stability, microstructure, and processing history.",
+                encoding="utf-8",
+            )
+            (knowledge_dir / "rag.md").write_text(
+                "BM25 keyword search works best when query and document share exact lexical terms.",
+                encoding="utf-8",
+            )
+            kb = LocalKnowledgeBase(knowledge_dir)
+
+            keyword_results = kb.retrieve("高熵合金强度受哪些微观组织因素影响", top_k=3, methods=["keyword"])
+            hybrid_results = kb.retrieve(
+                "高熵合金强度受哪些微观组织因素影响",
+                top_k=3,
+                methods=["bm25", "semantic", "graph"],
+            )
+
+            self.assertFalse(any(result.source == str(target) for result in keyword_results))
+            self.assertGreaterEqual(len(hybrid_results), 1)
+            self.assertEqual(hybrid_results[0].source, str(target))
+            self.assertIn("semantic", hybrid_results[0].score_breakdown)
+            self.assertIn("graph", hybrid_results[0].retrieval_method)
+
+    def test_graph_retrieval_can_be_used_as_standalone_method(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge_dir = root / "knowledge"
+            knowledge_dir.mkdir()
+            target = knowledge_dir / "workflow.md"
+            target.write_text(
+                "The evidence gate connects failed audits to retrieve. Retrieve then returns support to reason.",
+                encoding="utf-8",
+            )
+            (knowledge_dir / "memory.md").write_text(
+                "Memory proposals require approval before persistent storage changes.",
+                encoding="utf-8",
+            )
+            kb = LocalKnowledgeBase(knowledge_dir)
+
+            results = kb.retrieve("gate retrieve support", top_k=2, methods=["graph"])
+
+            self.assertGreaterEqual(len(results), 1)
+            self.assertEqual(results[0].source, str(target))
+            self.assertEqual(results[0].retrieval_method, "graph")
+            self.assertGreater(results[0].score_breakdown["graph"], 0)
+
+    def test_wiki_fallback_can_be_switched_on_and_combined(self):
+        class FakeWikiSource:
+            def retrieve(self, query, *, top_k):
+                return [
+                    {
+                        "title": "Hierarchical navigable small world",
+                        "url": "https://en.wikipedia.org/wiki/Hierarchical_navigable_small_world",
+                        "summary": "HNSW is a graph-based approximate nearest neighbor search algorithm.",
+                        "score": 0.68,
+                    }
+                ][:top_k]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge_dir = root / "knowledge"
+            knowledge_dir.mkdir()
+            (knowledge_dir / "memory.md").write_text(
+                "Memory gate policies are unrelated to approximate nearest neighbor search.",
+                encoding="utf-8",
+            )
+            ledger = EvidenceLedger(root / "evidence" / "ledger.jsonl")
+            kb = LocalKnowledgeBase(knowledge_dir, ledger=ledger, wiki_source=FakeWikiSource())
+
+            local_only = kb.retrieve("HNSW approximate nearest neighbor graph", top_k=3, methods=["bm25"])
+            with_wiki = kb.retrieve(
+                "HNSW approximate nearest neighbor graph",
+                top_k=3,
+                methods=["bm25", "wiki"],
+                wiki_top_k=1,
+            )
+
+            self.assertFalse(any(result.source.startswith("https://en.wikipedia.org/") for result in local_only))
+            self.assertTrue(any(result.source.startswith("https://en.wikipedia.org/") for result in with_wiki))
+            wiki_result = next(result for result in with_wiki if result.source.startswith("https://en.wikipedia.org/"))
+            self.assertEqual(wiki_result.retrieval_method, "wiki")
+            self.assertTrue(wiki_result.evidence_id.startswith("ev_"))
+
+    def test_wikipedia_source_sends_user_agent_and_records_errors(self):
+        captured = {}
+
+        class FakeResponse:
+            def read(self):
+                return json.dumps(
+                    {
+                        "query": {
+                            "search": [
+                                {
+                                    "title": "Hierarchical navigable small world",
+                                    "snippet": "HNSW is a graph-based approximate nearest neighbor algorithm.",
+                                }
+                            ]
+                        }
+                    }
+                ).encode("utf-8")
+
+        def fake_urlopen(request, *, timeout):
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        source = WikipediaKnowledgeSource(urlopen=fake_urlopen, timeout_seconds=7)
+        results = source.retrieve("HNSW approximate nearest neighbor graph", top_k=1)
+
+        self.assertEqual(results[0]["title"], "Hierarchical navigable small world")
+        self.assertIn("wikipedia.org/w/api.php", captured["url"])
+        self.assertEqual(captured["timeout"], 7)
+        self.assertTrue(
+            any(key.lower() == "user-agent" and value for key, value in captured["headers"].items())
+        )
+
+        def failing_urlopen(request, *, timeout):
+            raise RuntimeError("blocked by provider")
+
+        failing_source = WikipediaKnowledgeSource(urlopen=failing_urlopen)
+        self.assertEqual(failing_source.retrieve("HNSW", top_k=1), [])
+        self.assertEqual(failing_source.diagnostics[-1]["status"], "error")
+        self.assertIn("blocked by provider", failing_source.diagnostics[-1]["message"])
 
     def test_long_term_memory_requires_evidence_and_never_writes_shared_partition(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,6 +7,12 @@
   workflowSpecPayload: null,
   workflowEditMode: false,
   workflowProposal: null,
+  selectedAgentName: null,
+  agentSpecPayload: null,
+  agentEditMode: false,
+  agentProposal: null,
+  chatMode: "chat",
+  ragLab: { query: "", methods: ["bm25", "semantic", "graph"], result: null, error: "" },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -141,7 +147,7 @@ function renderStatus(payload) {
   $("routingStatus").textContent = `${labelStatus(payload.routing?.difficulty || "idle")} / ${labelStatus(payload.workflow?.variant || payload.routing?.workflow || "idle")}`;
   $("evidenceCount").textContent = `${labelStatus(payload.evidence?.mode || "idle")} / ${labelStatus(payload.evidence?.strictness || "none")} / ${labelStatus(payload.evidence?.status || "idle")} / ${payload.evidence?.count ?? 0}`;
   $("ragCount").textContent = `${payload.rag?.count ?? 0} / ${payload.external_evidence?.count ?? 0}`;
-  $("agentCount").textContent = `${payload.agents?.length || 0} 个已加载`;
+  $("agentCount").textContent = agentCountLabel(payload);
   $("currentStage").textContent = labelStatus(payload.workflow?.current || payload.state_machine?.current || "idle");
   $("runId").textContent = payload.run_id ? `${payload.run_id} | ${payload.thread_id || state.threadId}` : `暂无运行 | ${state.threadId}`;
 
@@ -161,21 +167,185 @@ function renderWorkingHint(payload) {
 }
 
 function renderAgents(agents) {
-  $("agentsList").innerHTML = agents
+  const displayAgents = agentDisplayList(agents);
+  $("agentsList").innerHTML = `
+    ${renderAgentsEditor()}
+    ${displayAgents
     .map((agent) => {
       const status = agent.status || "idle";
       return `
-        <article class="agent-row">
+        <article class="agent-row ${state.selectedAgentName === agent.name ? "selected" : ""}" data-agent-select="${escapeHtml(agent.name)}">
           <header>
-            <h3>${escapeHtml(agent.name)}</h3>
+            <h3>${escapeHtml(agent.label || agent.name)}</h3>
             <span class="badge ${escapeHtml(status)}">${escapeHtml(labelStatus(status))}</span>
           </header>
+          <p class="mono">${escapeHtml(agent.name)}${agent.protected ? " | protected" : ""}</p>
           <p>${escapeHtml(agent.description || "")}</p>
           <p class="mono">${escapeHtml(agent.last_event || agent.current_stage || "")}</p>
         </article>
       `;
     })
-    .join("");
+    .join("")}
+  `;
+}
+
+function agentDisplayList(runtimeAgents) {
+  const specPayload = state.agentSpecPayload || {};
+  const spec = state.agentEditMode ? specPayload.draft || specPayload.spec : null;
+  if (!spec) return runtimeAgents;
+  const runtimeByName = new Map((runtimeAgents || []).map((agent) => [agent.name, agent]));
+  const protectedAgents = new Set(spec.protected_agents || []);
+  const agents = builderVisibleAgents(spec);
+  return agents.map((agent) => {
+    const runtime = runtimeByName.get(agent.id) || {};
+    return {
+      ...runtime,
+      name: agent.id,
+      label: agent.label || agent.id,
+      description: agent.description || "",
+      responsibilities: agent.responsibilities || [],
+      model_role: agent.model_role || "worker",
+      tools: agent.tools || [],
+      memory_access: agent.memory_access || [],
+      workflow_nodes: agent.workflow_nodes || [],
+      ui: agent.ui || {},
+      protected: protectedAgents.has(agent.id),
+      status: runtime.status || "idle",
+      current_stage: runtime.current_stage || agent.id,
+    };
+  });
+}
+
+function builderVisibleAgents(spec) {
+  const agents = spec.agents || [];
+  const hasBuilderLayer = agents.some((agent) => agent.ui?.builder_visible || agent.ui?.builder_hidden);
+  if (!hasBuilderLayer) return agents;
+  return agents.filter((agent) => !agent.ui?.builder_hidden);
+}
+
+function agentCountLabel(payload) {
+  const specPayload = state.agentSpecPayload || {};
+  const spec = state.agentEditMode ? specPayload.draft || specPayload.spec : null;
+  if (!spec) return `${payload.agents?.length || 0} 个已加载`;
+  const agents = spec.agents || [];
+  const protectedAgents = new Set(spec.protected_agents || []);
+  const visible = builderVisibleAgents(spec);
+  const protectedCount = agents.filter((agent) => protectedAgents.has(agent.id)).length;
+  const designCount = visible.filter((agent) => !protectedAgents.has(agent.id)).length;
+  if (agents.some((agent) => agent.ui?.builder_visible || agent.ui?.builder_hidden)) {
+    return `${designCount} 个设计 / ${protectedCount} 个底座`;
+  }
+  return `${agents.length} 个草稿`;
+}
+
+function renderAgentsEditor() {
+  const specPayload = state.agentSpecPayload;
+  if (!specPayload) {
+    return `
+      <article class="agent-editor agent-row">
+        <header>
+          <h3>多 Agent 编辑器</h3>
+          <button type="button" class="secondary" data-agent-action="load-spec">加载 Agent Spec</button>
+        </header>
+        <p>加载后可以新增、删除、修改 Agent；AI 搭建由左侧对话区的顶层搭建助手负责。</p>
+      </article>
+    `;
+  }
+  const spec = editableAgentsSpec();
+  const validation = specPayload.validation || {};
+  const selected = state.selectedAgentName;
+  const protectedAgents = new Set(spec.protected_agents || []);
+  const proposal = state.agentProposal;
+  return `
+    <article class="agent-editor agent-row ${state.agentEditMode ? "editing" : ""}">
+      <header>
+        <h3>多 Agent 编辑器 <span class="badge ${validation.ok ? "completed" : "interrupt"}">${validation.ok ? "校验通过" : "需要处理"}</span></h3>
+        <button type="button" class="secondary" data-agent-action="toggle-edit">${state.agentEditMode ? "退出编辑" : "编辑 Agent"}</button>
+      </header>
+      <p class="mono">Spec: ${escapeHtml(spec.name || "agents")} | revision=${escapeHtml(spec.revision || "dev")} | draft=${specPayload.draft ? "yes" : "no"}</p>
+      ${renderAgentBuilderScope(spec)}
+      ${renderAgentValidation(validation)}
+      <div class="agent-editor-actions">
+        <button type="button" class="secondary" data-agent-action="load-spec">刷新 Spec</button>
+        <button type="button" data-agent-action="save-draft" ${state.agentEditMode ? "" : "disabled"}>保存草稿</button>
+        <button type="button" data-agent-action="create-proposal" ${state.agentEditMode ? "" : "disabled"}>生成提案</button>
+        <button type="button" class="danger" data-agent-action="apply-proposal" ${proposal?.proposal_id ? "" : "disabled"}>批准应用</button>
+      </div>
+      ${
+        state.agentEditMode
+          ? `
+        <div class="agent-editor-actions">
+          <button type="button" data-agent-action="add-agent">添加 Agent</button>
+          <button type="button" class="danger" data-agent-action="delete-agent" ${selected ? "" : "disabled"}>删除所选</button>
+        </div>
+        ${renderAgentObjectEditor(spec, selected, protectedAgents)}
+      `
+          : `<p class="empty">点击“编辑 Agent”后，可以点下面的 Agent 卡片修改；AI 搭建请使用左侧对话区。</p>`
+      }
+      ${proposal ? renderAgentProposal(proposal) : ""}
+      <p class="empty">需要 AI 生成草稿时，请到左侧对话区切换“搭建助手”，或在普通对话中用 /配置、/搭建 触发。</p>
+    </article>
+  `;
+}
+
+function renderAgentBuilderScope(spec) {
+  const agents = spec.agents || [];
+  if (!agents.some((agent) => agent.ui?.builder_visible || agent.ui?.builder_hidden)) return "";
+  const protectedAgents = new Set(spec.protected_agents || []);
+  const designCount = builderVisibleAgents(spec).filter((agent) => !protectedAgents.has(agent.id)).length;
+  const protectedCount = agents.filter((agent) => protectedAgents.has(agent.id)).length;
+  return `<p class="mono">搭建视图: ${designCount} 个设计 Agent；${protectedCount} 个底座 Agent 已隐藏但会随提案保留。</p>`;
+}
+
+function renderAgentValidation(validation) {
+  const errors = validation.errors || [];
+  const warnings = validation.warnings || [];
+  if (!errors.length && !warnings.length) return `<p class="mono">校验: agents spec 可运行。</p>`;
+  return `
+    <div class="workflow-validation">
+      ${errors.map((item) => `<p class="error">错误: ${escapeHtml(item)}</p>`).join("")}
+      ${warnings.map((item) => `<p class="warn">提醒: ${escapeHtml(item)}</p>`).join("")}
+    </div>
+  `;
+}
+
+function renderAgentObjectEditor(spec, selected, protectedAgents) {
+  if (!selected) return `<p class="empty">点击下面的 Agent 卡片后，这里会显示可编辑属性。</p>`;
+  const agent = (spec.agents || []).find((item) => item.id === selected);
+  if (!agent) return `<p class="empty">未找到所选 Agent。</p>`;
+  const isProtected = protectedAgents.has(agent.id);
+  return `
+    <div class="agent-edit-grid">
+      <label>Agent ID<input id="agentId" value="${escapeHtml(agent.id)}" ${isProtected ? "readonly" : ""}></label>
+      <label>显示名称<input id="agentLabel" value="${escapeHtml(agent.label || "")}"></label>
+      <label>模型角色
+        <select id="agentModelRole">
+          ${["planner", "worker", "critic", "grader"].map((item) => `<option value="${item}" ${item === agent.model_role ? "selected" : ""}>${item}</option>`).join("")}
+        </select>
+      </label>
+      <label class="span-2">描述<input id="agentDescription" value="${escapeHtml(agent.description || "")}"></label>
+      <label class="span-2">职责，每行一条<textarea id="agentResponsibilities">${escapeHtml((agent.responsibilities || []).join("\n"))}</textarea></label>
+      <label>工具，每行一条<textarea id="agentTools">${escapeHtml((agent.tools || []).join("\n"))}</textarea></label>
+      <label>记忆权限，每行一条<textarea id="agentMemoryAccess">${escapeHtml((agent.memory_access || []).join("\n"))}</textarea></label>
+      <label>绑定 Workflow 节点，每行一条<textarea id="agentWorkflowNodes">${escapeHtml((agent.workflow_nodes || []).join("\n"))}</textarea></label>
+      <label>权限 JSON<textarea id="agentPermissions">${escapeHtml(JSON.stringify(agent.permissions || {}, null, 2))}</textarea></label>
+      <label class="span-2">交付契约 JSON<textarea id="agentHandoff">${escapeHtml(JSON.stringify(agent.handoff_contract || {}, null, 2))}</textarea></label>
+      <div class="span-2 agent-editor-actions">
+        <button type="button" data-agent-action="save-agent">更新 Agent</button>
+        <button type="button" class="danger" data-agent-action="delete-agent" ${isProtected ? "disabled" : ""}>删除 Agent</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderAgentProposal(proposal) {
+  return `
+    <article class="proposal-preview">
+      <p><strong>待应用 Agent 提案</strong> <span class="badge pending">${escapeHtml(proposal.proposal_id)}</span></p>
+      <p class="mono">draft_hash=${escapeHtml(proposal.draft_hash || "")} | files=${escapeHtml((proposal.modified_files || []).join(", "))}</p>
+      <pre class="mono artifact-json">${escapeHtml(proposal.diff_preview || "暂无 diff。")}</pre>
+    </article>
+  `;
 }
 
 function workflowDisplayGraph(payload) {
@@ -184,10 +354,15 @@ function workflowDisplayGraph(payload) {
   const spec = state.workflowEditMode ? specPayload.draft || specPayload.spec : null;
   if (!spec) return runtimeWorkflow;
   const runtimeNodes = new Map((runtimeWorkflow.nodes || []).map((node) => [node.id, node]));
+  const specNodes = builderVisibleWorkflowNodes(spec);
+  const visibleNodeIds = new Set(specNodes.map((node) => node.id));
+  const specEdges = builderWorkflowLayerActive(spec)
+    ? (spec.edges || []).filter((edge) => visibleNodeIds.has(edge.from) && visibleNodeIds.has(edge.to))
+    : spec.edges || [];
   return {
     ...runtimeWorkflow,
     status: runtimeWorkflow.status || "idle",
-    nodes: (spec.nodes || []).map((node) => {
+    nodes: specNodes.map((node) => {
       const runtimeNode = runtimeNodes.get(node.id) || {};
       return {
         ...runtimeNode,
@@ -211,7 +386,7 @@ function workflowDisplayGraph(payload) {
         artifacts: runtimeNode.artifacts || { actual_input: {}, actual_output: {}, process: [], handoff: {} },
       };
     }),
-    edges: (spec.edges || []).map((edge) => ({
+    edges: specEdges.map((edge) => ({
       id: edge.id || `${edge.from}->${edge.to}`,
       from: edge.from,
       to: edge.to,
@@ -223,7 +398,7 @@ function workflowDisplayGraph(payload) {
       planner_contract: edge.planner_contract || {},
       reviewer_required: Boolean(edge.reviewer_required),
     })),
-    checkpoints: (spec.nodes || []).filter((node) => node.checkpoint).map((node) => node.id),
+    checkpoints: specNodes.filter((node) => node.checkpoint).map((node) => node.id),
     spec: {
       name: spec.name,
       revision: spec.revision,
@@ -232,6 +407,16 @@ function workflowDisplayGraph(payload) {
       terminal_nodes: spec.terminal_nodes || [],
     },
   };
+}
+
+function builderWorkflowLayerActive(spec) {
+  return (spec.nodes || []).some((node) => node.ui?.builder_visible || node.ui?.builder_hidden);
+}
+
+function builderVisibleWorkflowNodes(spec) {
+  const nodes = spec.nodes || [];
+  if (!builderWorkflowLayerActive(spec)) return nodes;
+  return nodes.filter((node) => !node.ui?.builder_hidden);
 }
 
 function renderWorkflowGraph(workflow) {
@@ -356,12 +541,27 @@ function handleWorkflowGraphSelection(workflow, element, kind) {
   applyWorkflowSelectionToOpenGraphs();
   renderTab();
   applyWorkflowSelectionToOpenGraphs();
+  focusWorkflowSelectionPanel();
 }
 
 function applyWorkflowSelectionToOpenGraphs() {
   document.querySelectorAll(".workflow-graph").forEach((container) => {
     if (container._workflowCy) applyWorkflowSelectionToGraph(container._workflowCy);
   });
+}
+
+function focusWorkflowSelectionPanel() {
+  window.setTimeout(() => {
+    const panel = document.querySelector(".workflow-selection");
+    const scroller = $("tabContent");
+    if (!panel || !scroller) return;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const targetTop = scroller.scrollTop + (panelRect.top - scrollerRect.top) - 10;
+    panel.classList.add("selection-focus");
+    scroller.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+    window.setTimeout(() => panel.classList.remove("selection-focus"), 1400);
+  }, 0);
 }
 
 function applyWorkflowSelectionToGraph(cy) {
@@ -493,27 +693,27 @@ function cytoscapeWorkflowStyle() {
       selector: "node",
       style: {
         "shape": "round-rectangle",
-        "width": 94,
-        "height": 44,
+        "width": 98,
+        "height": 46,
         "background-color": "#ffffff",
-        "border-width": 1.5,
-        "border-color": "#cfd8cf",
+        "border-width": 1.4,
+        "border-color": "#c2ccd9",
         "label": "data(displayLabel)",
         "font-size": 9,
         "font-weight": 700,
-        "color": "#20231f",
+        "color": "#151922",
         "text-valign": "center",
         "text-halign": "center",
         "line-height": 1.14,
         "text-wrap": "wrap",
-        "text-max-width": 84,
+        "text-max-width": 88,
         "overlay-opacity": 0,
       },
     },
     {
       selector: "node.active",
       style: {
-        "background-color": "#edf8f6",
+        "background-color": "#ecfdfb",
         "border-color": "#0f766e",
         "border-width": 3,
       },
@@ -521,23 +721,23 @@ function cytoscapeWorkflowStyle() {
     {
       selector: "node.selected",
       style: {
-        "background-color": "#f0fdfa",
-        "border-color": "#0f766e",
+        "background-color": "#f5fffd",
+        "border-color": "#14a39a",
         "border-width": 4,
       },
     },
     {
       selector: "node.completed",
       style: {
-        "background-color": "#f3faf4",
+        "background-color": "#f0faf1",
         "border-color": "#2f7d32",
       },
     },
     {
       selector: "node.skipped, node.noop",
       style: {
-        "background-color": "#fff9e8",
-        "border-color": "#a16207",
+        "background-color": "#fff8eb",
+        "border-color": "#b7791f",
         "border-style": "dashed",
       },
     },
@@ -550,17 +750,17 @@ function cytoscapeWorkflowStyle() {
     {
       selector: "edge",
       style: {
-        "width": 2.3,
-        "line-color": "#c7d0c6",
-        "target-arrow-color": "#c7d0c6",
+        "width": 2.2,
+        "line-color": "#c2ccd9",
+        "target-arrow-color": "#c2ccd9",
         "target-arrow-shape": "triangle",
         "curve-style": "bezier",
         "control-point-step-size": 34,
         "label": "data(label)",
         "font-size": 8,
-        "color": "#687066",
-        "text-background-color": "#fbfcfb",
-        "text-background-opacity": 0.72,
+        "color": "#667085",
+        "text-background-color": "#fbfdff",
+        "text-background-opacity": 0.82,
         "text-background-padding": 2,
         "text-rotation": "none",
         "opacity": 0.86,
@@ -571,8 +771,8 @@ function cytoscapeWorkflowStyle() {
       selector: "edge.branch",
       style: {
         "line-style": "dashed",
-        "line-color": "#8ea39b",
-        "target-arrow-color": "#8ea39b",
+        "line-color": "#64748b",
+        "target-arrow-color": "#64748b",
       },
     },
     {
@@ -581,17 +781,17 @@ function cytoscapeWorkflowStyle() {
         "curve-style": "bezier",
         "control-point-step-size": 48,
         "line-style": "dashed",
-        "line-color": "#a16207",
-        "target-arrow-color": "#a16207",
-        "color": "#a16207",
+        "line-color": "#b7791f",
+        "target-arrow-color": "#b7791f",
+        "color": "#b7791f",
       },
     },
     {
       selector: "edge.selected",
       style: {
         "width": 3.8,
-        "line-color": "#0f766e",
-        "target-arrow-color": "#0f766e",
+        "line-color": "#14a39a",
+        "target-arrow-color": "#14a39a",
         "opacity": 1,
       },
     },
@@ -697,20 +897,70 @@ function renderRoutingTab(target, payload) {
 }
 
 function renderRagTab(target, payload) {
-  const items = payload.rag?.results || [];
-  target.innerHTML = items.length
-    ? items
+  const liveRag = payload.rag || {};
+  const lab = state.ragLab?.result;
+  const rag = lab || liveRag;
+  const items = rag.results || [];
+  const selected = new Set(state.ragLab?.methods || ["bm25", "semantic", "graph"]);
+  const queryValue = state.ragLab?.query || liveRag.query || "";
+  const methodToggle = (value, label) => `
+    <label class="method-toggle">
+      <input type="checkbox" name="ragMethod" value="${escapeHtml(value)}" ${selected.has(value) ? "checked" : ""}>
+      ${escapeHtml(label)}
+    </label>
+  `;
+  const diagnostics = rag.diagnostics || [];
+  const diagnosticsBlock = diagnostics.length
+    ? diagnostics
         .map(
           (item) => `
-        <article class="detail-item">
-          <p><strong>${escapeHtml(item.source)}</strong> <span class="badge completed">${Number(item.score || 0).toFixed(2)}</span></p>
-          <p class="mono">${escapeHtml(item.span)} | ${escapeHtml(referenceLabel(payload, item.evidence_id))}</p>
-          <p>${escapeHtml(item.text || "")}</p>
+        <article class="detail-item compact">
+          <p><strong>${escapeHtml(item.source || "rag")}</strong> <span class="badge ${escapeHtml(item.status || "completed")}">${escapeHtml(labelStatus(item.status || "completed"))}</span></p>
+          <p class="mono">${escapeHtml(item.message || "")}</p>
         </article>
       `,
         )
         .join("")
-    : `<p class="empty">暂无本地 RAG 结果。</p>`;
+    : "";
+  target.innerHTML = `
+    <form id="ragQueryForm" class="rag-query-panel">
+      <input name="query" value="${escapeHtml(queryValue)}" placeholder="输入一个查询来测试 RAG 召回">
+      <div class="method-toggles">
+        ${methodToggle("bm25", "BM25")}
+        ${methodToggle("semantic", "语义")}
+        ${methodToggle("graph", "Graph")}
+        ${methodToggle("wiki", "Wiki")}
+      </div>
+      <button type="submit">检索</button>
+    </form>
+    <article class="detail-item">
+      <p><strong>RAG 检索</strong> ${escapeHtml(items.length)} 条</p>
+      <p>方法: ${escapeHtml((rag.methods || liveRag.methods || []).join(" + ") || "暂无")}</p>
+      <p class="mono">query=${escapeHtml(rag.query || queryValue || "")}</p>
+      ${state.ragLab?.error ? `<p class="error">${escapeHtml(state.ragLab.error)}</p>` : ""}
+    </article>
+    ${diagnosticsBlock}
+    ${
+      items.length
+        ? items
+            .map((item) => {
+              const breakdown = item.score_breakdown || {};
+              const breakdownText = Object.entries(breakdown)
+                .map(([key, value]) => `${key}=${Number(value || 0).toFixed(2)}`)
+                .join(" | ");
+              return `
+        <article class="detail-item">
+          <p><strong>${escapeHtml(item.source)}</strong> <span class="badge completed">${Number(item.score || 0).toFixed(2)}</span></p>
+          <p class="mono">${escapeHtml(item.span)} | ${escapeHtml(referenceLabel(payload, item.evidence_id))}</p>
+          <p class="mono">method=${escapeHtml(item.retrieval_method || "keyword")}${breakdownText ? ` | ${escapeHtml(breakdownText)}` : ""}</p>
+          <p>${escapeHtml(item.text || "")}</p>
+        </article>
+      `;
+            })
+            .join("")
+        : `<p class="empty">暂无本地 RAG 结果。</p>`
+    }
+  `;
 }
 
 function renderExternalTab(target, payload) {
@@ -1111,6 +1361,7 @@ function renderWorkflowEditor(payload) {
         <div>
           <p><strong>工作流编辑器</strong> <span class="badge ${validation.ok ? "completed" : "interrupt"}">${validation.ok ? "校验通过" : "需要处理"}</span></p>
           <p class="mono">Spec: ${escapeHtml(spec.name || "workflow")} | revision=${escapeHtml(spec.revision || "dev")} | draft=${specPayload.draft ? "yes" : "no"}</p>
+          ${renderWorkflowBuilderScope(spec)}
         </div>
         <div class="workflow-editor-actions">
           <button type="button" class="secondary" data-workflow-action="toggle-edit">${state.workflowEditMode ? "退出编辑" : "编辑工作流"}</button>
@@ -1135,8 +1386,18 @@ function renderWorkflowEditor(payload) {
           : `<p class="empty">进入编辑模式后，可以在图上选择节点或连线，修改 Agent、工作内容、门禁、规划化交付和连接关系。</p>`
       }
       ${proposal ? renderWorkflowProposal(proposal) : ""}
+      <p class="empty">需要 AI 生成草稿时，请到左侧对话区切换“搭建助手”，或在普通对话中用 /配置、/搭建 触发。</p>
     </article>
   `;
+}
+
+function renderWorkflowBuilderScope(spec) {
+  if (!builderWorkflowLayerActive(spec)) return "";
+  const protectedNodes = new Set(spec.protected_nodes || []);
+  const visible = builderVisibleWorkflowNodes(spec);
+  const designCount = visible.filter((node) => !protectedNodes.has(node.id)).length;
+  const protectedCount = (spec.nodes || []).filter((node) => protectedNodes.has(node.id)).length;
+  return `<p class="mono">搭建视图: ${designCount} 个设计节点；${protectedCount} 个底座节点已隐藏但会随提案保留。</p>`;
 }
 
 function renderWorkflowValidation(validation) {
@@ -1354,10 +1615,21 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value || {}));
 }
 
+function linesFromTextarea(id) {
+  const node = $(id);
+  return node ? node.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) : [];
+}
+
 async function loadWorkflowSpec({ render = false } = {}) {
   state.workflowSpecPayload = await api("/api/workflow/spec");
   if (render && state.payload) renderStatus(state.payload);
   return state.workflowSpecPayload;
+}
+
+async function loadAgentSpec({ render = false } = {}) {
+  state.agentSpecPayload = await api("/api/agents/spec");
+  if (render && state.payload) renderStatus(state.payload);
+  return state.agentSpecPayload;
 }
 
 function setWorkflowDraft(spec) {
@@ -1365,6 +1637,141 @@ function setWorkflowDraft(spec) {
   state.workflowSpecPayload.draft = spec;
   state.workflowSpecPayload.validation = state.workflowSpecPayload.validation || { ok: false, errors: [], warnings: ["草稿尚未保存校验"], requires_code: [] };
   if (state.payload) renderStatus(state.payload);
+}
+
+function editableAgentsSpec() {
+  const specPayload = state.agentSpecPayload || {};
+  return deepClone(specPayload.draft || specPayload.spec || { version: "1.0", name: "agents", revision: "draft", protected_agents: [], agents: [] });
+}
+
+function setAgentDraft(spec, validation = null) {
+  state.agentSpecPayload = state.agentSpecPayload || {};
+  state.agentSpecPayload.draft = spec;
+  state.agentSpecPayload.validation = validation || state.agentSpecPayload.validation || { ok: false, errors: [], warnings: ["草稿尚未保存校验"] };
+  if (state.payload) renderStatus(state.payload);
+}
+
+function updateSelectedAgentObject(spec) {
+  const selected = state.selectedAgentName;
+  if (!selected || !$("agentId")) return spec;
+  const index = (spec.agents || []).findIndex((agent) => agent.id === selected);
+  if (index < 0) return spec;
+  const previousId = spec.agents[index].id;
+  const nextId = $("agentId").value.trim() || previousId;
+  const agent = {
+    ...spec.agents[index],
+    id: nextId,
+    label: $("agentLabel").value.trim() || nextId,
+    description: $("agentDescription").value.trim(),
+    model_role: $("agentModelRole").value,
+    responsibilities: linesFromTextarea("agentResponsibilities"),
+    tools: linesFromTextarea("agentTools"),
+    memory_access: linesFromTextarea("agentMemoryAccess"),
+    workflow_nodes: linesFromTextarea("agentWorkflowNodes"),
+    permissions: parseJsonField("agentPermissions", {}),
+    handoff_contract: parseJsonField("agentHandoff", {}),
+  };
+  spec.agents[index] = agent;
+  if (nextId !== previousId) {
+    spec.protected_agents = (spec.protected_agents || []).map((item) => (item === previousId ? nextId : item));
+    state.selectedAgentName = nextId;
+  }
+  return spec;
+}
+
+function addAgent() {
+  const spec = editableAgentsSpec();
+  const id = nextAgentId(spec, "custom_agent");
+  spec.agents = spec.agents || [];
+  spec.agents.push({
+    id,
+    label: "自定义 Agent",
+    description: "新的可配置 Agent。",
+    responsibilities: ["补充这个 Agent 的职责"],
+    model_role: "worker",
+    tools: [],
+    permissions: {},
+    memory_access: [],
+    workflow_nodes: [],
+    handoff_contract: {},
+    ui: {},
+  });
+  state.selectedAgentName = id;
+  state.agentEditMode = true;
+  setAgentDraft(spec);
+}
+
+function deleteSelectedAgent() {
+  const selected = state.selectedAgentName;
+  if (!selected) return;
+  const spec = editableAgentsSpec();
+  if ((spec.protected_agents || []).includes(selected)) {
+    appendMessage("agent", `受保护 Agent ${selected} 不能删除。`);
+    return;
+  }
+  spec.agents = (spec.agents || []).filter((agent) => agent.id !== selected);
+  state.selectedAgentName = null;
+  setAgentDraft(spec);
+}
+
+function nextAgentId(spec, base) {
+  const ids = new Set((spec.agents || []).map((agent) => agent.id));
+  if (!ids.has(base)) return base;
+  let index = 2;
+  while (ids.has(`${base}_${index}`)) index += 1;
+  return `${base}_${index}`;
+}
+
+async function saveAgentDraft() {
+  const spec = updateSelectedAgentObject(editableAgentsSpec());
+  const payload = await api("/api/agents/draft", { method: "POST", body: JSON.stringify({ spec }) });
+  state.agentSpecPayload = { ...(state.agentSpecPayload || {}), draft: payload.spec, validation: payload.validation };
+  renderStatus(state.payload || {});
+}
+
+async function createAgentProposal() {
+  await saveAgentDraft();
+  state.agentProposal = await api("/api/agents/proposal", { method: "POST", body: JSON.stringify({}) });
+  renderStatus(state.payload || {});
+}
+
+async function applyAgentProposal() {
+  if (!state.agentProposal?.proposal_id) return;
+  const result = await api("/api/agents/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      proposal_id: state.agentProposal.proposal_id,
+      approved: true,
+      approved_by: "web-debugger",
+    }),
+  });
+  state.agentProposal = null;
+  state.agentSpecPayload = result.agents;
+  state.agentEditMode = false;
+  await refreshStatus();
+}
+
+async function handleAgentEditorAction(action) {
+  try {
+    if (action === "load-spec") return loadAgentSpec({ render: true });
+    if (action === "toggle-edit") {
+      state.agentEditMode = !state.agentEditMode;
+      if (!state.agentSpecPayload) await loadAgentSpec();
+      renderStatus(state.payload || {});
+      return;
+    }
+    if (action === "add-agent") return addAgent();
+    if (action === "delete-agent") return deleteSelectedAgent();
+    if (action === "save-agent") {
+      setAgentDraft(updateSelectedAgentObject(editableAgentsSpec()));
+      return;
+    }
+    if (action === "save-draft") return saveAgentDraft();
+    if (action === "create-proposal") return createAgentProposal();
+    if (action === "apply-proposal") return applyAgentProposal();
+  } catch (error) {
+    appendMessage("agent", `Agent 编辑错误: ${error.message}`);
+  }
 }
 
 function updateSelectedWorkflowObject(spec) {
@@ -1610,16 +2017,125 @@ async function handleWorkflowEditorAction(action) {
   }
 }
 
+function setChatMode(mode) {
+  state.chatMode = mode === "builder" ? "builder" : "chat";
+  document.querySelectorAll("[data-chat-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.chatMode === state.chatMode);
+  });
+  const hint = $("conversationModeHint");
+  const input = $("messageInput");
+  if (state.chatMode === "builder") {
+    if (hint) hint.textContent = "搭建助手模式。直接描述你想要的 Agent、工作流、门禁和交付机制；生成结果会进入右侧人工审查面板。";
+    if (input) input.placeholder = "例如：我要一个材料学研究多 Agent，在推理后加入领域审查，并要求 reviewer 审查门禁...";
+  } else {
+    if (hint) hint.textContent = "普通对话。输入 /配置、/搭建、#配置 或 #搭建 可以临时启用搭建助手。";
+    if (input) input.placeholder = "输入消息，回答将由 DeepSeek API 生成...";
+  }
+}
+
+function isConfiguratorMessage(message) {
+  const text = message.trim();
+  return /^(?:(?:\/配置|\/搭建|#配置|#搭建|\/config|\/build)(?:\s|$)|配置助手[:：]?)/i.test(text);
+}
+
+function chooseGeneratedAgent(spec) {
+  const agents = spec?.agents || [];
+  if (!agents.length) return state.selectedAgentName;
+  const protectedAgents = new Set(spec.protected_agents || []);
+  const generated = agents.filter((agent) => !protectedAgents.has(agent.id));
+  return (generated.at(-1) || agents.at(-1))?.id || state.selectedAgentName;
+}
+
+function chooseGeneratedWorkflowNode(spec) {
+  const nodes = spec?.nodes || [];
+  if (!nodes.length) return state.selectedWorkflowElement;
+  const protectedNodes = new Set(spec.protected_nodes || []);
+  const generated = nodes.filter((node) => !protectedNodes.has(node.id));
+  return { kind: "node", id: (generated.at(-1) || nodes.at(-1)).id };
+}
+
+async function sendConfiguratorMessage(message) {
+  $("agentStatus").textContent = "运行中";
+  $("runId").textContent = "搭建助手正在生成草稿...";
+  $("workingAgent").textContent = "Agent: configurator";
+  $("workingStage").textContent = "节点: workflow/agents draft";
+  $("workingHint").textContent = "顶层配置助手正在把自然语言需求转换为 Agent 与工作流草稿，右侧面板只负责人工审查和应用。";
+  const payload = await api("/api/configurator/compose", {
+    method: "POST",
+    body: JSON.stringify({ prompt: message, target: "auto" }),
+  });
+  if (payload.agents) {
+    state.agentSpecPayload = {
+      ...(state.agentSpecPayload || {}),
+      draft: payload.agents.spec,
+      validation: payload.agents.validation,
+      paths: payload.agents.paths,
+    };
+    state.agentEditMode = true;
+    state.agentProposal = null;
+    state.selectedAgentName = chooseGeneratedAgent(payload.agents.spec);
+  }
+  if (payload.workflow) {
+    state.workflowSpecPayload = {
+      ...(state.workflowSpecPayload || {}),
+      draft: payload.workflow.spec,
+      validation: payload.workflow.validation,
+      paths: payload.workflow.paths,
+    };
+    state.workflowEditMode = true;
+    state.workflowProposal = null;
+    state.selectedWorkflowElement = chooseGeneratedWorkflowNode(payload.workflow.spec);
+  }
+  await refreshStatus();
+  $("agentStatus").textContent = "已完成";
+  $("workingAgent").textContent = "Agent: configurator";
+  $("workingStage").textContent = `目标: ${(payload.targets || []).join(" + ") || "auto"}`;
+  const plan = payload.builder_plan;
+  const planHint = plan
+    ? `规模判断 ${plan.scale}，推荐 ${plan.agent_count} 个设计 Agent / ${plan.node_count} 个设计节点。`
+    : "";
+  $("workingHint").textContent = `${planHint}草稿已生成，但尚未应用。请在多 Agent / 工作流面板人工检查，再保存草稿、生成提案并批准应用。`;
+  return payload;
+}
+
+async function submitRagQuery(event) {
+  event.preventDefault();
+  const form = event.target;
+  const query = form.query.value.trim();
+  const methods = Array.from(form.querySelectorAll('input[name="ragMethod"]:checked')).map((item) => item.value);
+  state.ragLab = { query, methods, result: null, error: "" };
+  if (!query) {
+    state.ragLab.error = "请输入查询。";
+    renderTab();
+    return;
+  }
+  if (!methods.length) {
+    state.ragLab.error = "至少选择一种检索方法。";
+    renderTab();
+    return;
+  }
+  try {
+    const payload = await api("/api/rag/query", {
+      method: "POST",
+      body: JSON.stringify({ query, methods, top_k: 5 }),
+    });
+    state.ragLab = { query, methods, result: payload, error: "" };
+  } catch (error) {
+    state.ragLab = { query, methods, result: null, error: error.message };
+  }
+  renderTab();
+}
+
 function appendMessage(role, text) {
   const node = document.createElement("article");
   node.className = `message ${role}`;
-  node.innerHTML = `<strong>${role === "user" ? "用户" : "Agent"}</strong><p>${escapeHtml(text)}</p>`;
+  node.innerHTML = `<strong>${role === "user" ? "用户" : "Agent"}</strong><p>${escapeHtml(text).replaceAll("\n", "<br>")}</p>`;
   $("messages").appendChild(node);
   $("messages").scrollTop = $("messages").scrollHeight;
 }
 
 async function refreshStatus() {
-  const [payload] = await Promise.all([api("/api/status"), loadWorkflowSpec()]);
+  const [payload] = await Promise.all([api("/api/status"), loadWorkflowSpec(), loadAgentSpec()]);
   renderStatus(payload);
 }
 
@@ -1643,13 +2159,19 @@ async function sendMessage(event) {
   input.value = "";
   state.pendingQuestion = message;
   appendMessage("user", message);
+  const useConfigurator = state.chatMode === "builder" || isConfiguratorMessage(message);
   $("sendButton").disabled = true;
   $("agentStatus").textContent = "运行中";
   $("runId").textContent = "后台运行中...";
-  $("workingAgent").textContent = "Agent: coordinator";
-  $("workingStage").textContent = "节点: intake";
-  $("workingHint").textContent = "请求已提交，等待 Coordinator 启动。";
+  $("workingAgent").textContent = useConfigurator ? "Agent: configurator" : "Agent: coordinator";
+  $("workingStage").textContent = useConfigurator ? "节点: configure" : "节点: intake";
+  $("workingHint").textContent = useConfigurator ? "请求已交给顶层搭建助手。" : "请求已提交，等待 Coordinator 启动。";
   try {
+    if (useConfigurator) {
+      const payload = await sendConfiguratorMessage(message);
+      appendMessage("agent", payload.answer || "配置助手已生成草稿，请到右侧面板人工检查。");
+      return;
+    }
     await api("/api/chat", {
       method: "POST",
       body: JSON.stringify({ message, thread_id: state.threadId, async: true }),
@@ -1679,12 +2201,33 @@ document.querySelectorAll(".tab").forEach((button) => {
 
 $("chatForm").addEventListener("submit", sendMessage);
 $("refreshButton").addEventListener("click", refreshStatus);
+document.addEventListener("submit", (event) => {
+  if (event.target?.id === "ragQueryForm") {
+    submitRagQuery(event);
+  }
+});
+document.querySelectorAll("[data-chat-mode]").forEach((button) => {
+  button.addEventListener("click", () => setChatMode(button.dataset.chatMode));
+});
 document.addEventListener("click", (event) => {
+  const agentSelect = event.target.closest("[data-agent-select]");
+  if (agentSelect) {
+    state.selectedAgentName = agentSelect.dataset.agentSelect;
+    if (state.agentEditMode) renderStatus(state.payload || {});
+    return;
+  }
+  const agentButton = event.target.closest("[data-agent-action]");
+  if (agentButton) {
+    event.preventDefault();
+    handleAgentEditorAction(agentButton.dataset.agentAction);
+    return;
+  }
   const button = event.target.closest("[data-workflow-action]");
   if (!button) return;
   event.preventDefault();
   handleWorkflowEditorAction(button.dataset.workflowAction);
 });
 
+setChatMode("chat");
 refreshStatus().catch((error) => appendMessage("agent", `状态加载失败: ${error.message}`));
 

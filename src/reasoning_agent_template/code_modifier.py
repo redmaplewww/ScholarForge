@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from reasoning_agent_template.agents_spec import AgentsSpec, AgentsSpecStore
 from reasoning_agent_template.models import GateDecision, stable_hash
 from reasoning_agent_template.workflow_spec import WorkflowSpec, WorkflowSpecStore
 
@@ -14,6 +15,7 @@ ALLOWED_CODE_MODIFIER_PREFIXES = (
     "src/",
     "tests/",
     "configs/workflows/",
+    "configs/agents/",
     ".opencode/agents/code-modifier.md",
 )
 DENIED_CODE_MODIFIER_PREFIXES = (
@@ -41,6 +43,9 @@ class CodeModifierResult:
 
 class CodeModifierAdapter(Protocol):
     def apply_workflow_proposal(self, proposal: dict[str, Any], *, approved_by: str | None = None) -> CodeModifierResult:
+        ...
+
+    def apply_agents_proposal(self, proposal: dict[str, Any], *, approved_by: str | None = None) -> CodeModifierResult:
         ...
 
 
@@ -99,6 +104,52 @@ class LocalWorkflowSpecCodeModifier:
             test_command=str(proposal.get("test_command") or ""),
             gate_decision=decision.to_dict(),
             message="workflow spec applied by local code-modifier adapter",
+        )
+
+    def apply_agents_proposal(self, proposal: dict[str, Any], *, approved_by: str | None = None) -> CodeModifierResult:
+        proposal_id = str(proposal.get("proposal_id") or "")
+        draft_hash = str(proposal.get("draft_hash") or "")
+        target_path = str(proposal.get("target_path") or "")
+        validation = proposal.get("validation") or {}
+        modified_files = [str(item) for item in proposal.get("modified_files", [target_path]) if item]
+        decision = self._gate(
+            proposal_id=proposal_id,
+            draft_hash=draft_hash,
+            target_path=target_path,
+            modified_files=modified_files,
+            validation=validation,
+            approved_by=approved_by,
+        )
+        if decision.status != "allow":
+            return CodeModifierResult(
+                status=decision.status,
+                proposal_id=proposal_id,
+                draft_hash=draft_hash,
+                modified_files=modified_files,
+                test_command=str(proposal.get("test_command") or ""),
+                gate_decision=decision.to_dict(),
+                message="code-modifier gate did not allow applying this agents proposal",
+            )
+
+        spec = AgentsSpec.from_dict(dict(proposal.get("spec") or {}))
+        target = (self.workspace_root / target_path).resolve()
+        self._ensure_allowed_target(target, modified_files)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(spec.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        proposal["status"] = "applied"
+        proposal["approved_by"] = approved_by
+        AgentsSpecStore(self.workspace_root).save_proposal(proposal)
+        return CodeModifierResult(
+            status="applied",
+            proposal_id=proposal_id,
+            draft_hash=draft_hash,
+            modified_files=modified_files,
+            test_command=str(proposal.get("test_command") or ""),
+            gate_decision=decision.to_dict(),
+            message="agents spec applied by local code-modifier adapter",
         )
 
     def _gate(
@@ -192,6 +243,9 @@ class OpenCodeCodeModifier:
             message=f"opencode code-modifier exited with {completed.returncode}",
             output=(completed.stdout + completed.stderr)[-4000:],
         )
+
+    def apply_agents_proposal(self, proposal: dict[str, Any], *, approved_by: str | None = None) -> CodeModifierResult:
+        return self.apply_workflow_proposal(proposal, approved_by=approved_by)
 
 
 def _normalize_relative(path: str) -> str:

@@ -249,10 +249,31 @@ class TemplateCoordinator:
             knowledge_dir = self.workspace_root / knowledge_dir
         kb = LocalKnowledgeBase(knowledge_dir, ledger=self.ledger)
         top_k = int(self.config.knowledge.get("top_k", 5))
+        primary_methods = _knowledge_methods(self.config.knowledge)
+        fallback_methods = _knowledge_fallback_methods(self.config.knowledge)
+        min_score = float(self.config.knowledge.get("min_score", 0.0))
+        state.rag_methods = list(primary_methods)
         state.retrieval_results = kb.retrieve(
             state.user_goal,
             top_k=top_k,
+            methods=primary_methods,
+            min_score=min_score,
+            wiki_top_k=int(self.config.knowledge.get("wiki_top_k", 2)),
         )
+        state.rag_diagnostics = list(kb.diagnostics)
+        fallback_threshold = float(self.config.knowledge.get("fallback_min_score", 0.35))
+        best_local_score = max((chunk.score for chunk in state.retrieval_results), default=0.0)
+        if fallback_methods and best_local_score < fallback_threshold:
+            fallback_results = kb.retrieve(
+                state.user_goal,
+                top_k=max(1, int(self.config.knowledge.get("fallback_top_k", 2))),
+                methods=fallback_methods,
+                min_score=0.0,
+                wiki_top_k=int(self.config.knowledge.get("wiki_top_k", 2)),
+            )
+            state.rag_methods = [*state.rag_methods, *[method for method in fallback_methods if method not in state.rag_methods]]
+            state.rag_diagnostics.extend(kb.diagnostics)
+            state.retrieval_results = _dedupe_knowledge_chunks([*state.retrieval_results, *fallback_results])[:top_k]
         state.external_results = []
         external_sources = [source for source in state.evidence_sources if source in {"papers", "web", "user_experience"}]
         state.external_search_attempted = list(external_sources)
@@ -489,7 +510,16 @@ class TemplateCoordinator:
 
     def _has_strong_local_rag(self, state: AgentState) -> bool:
         threshold = float(self.config.gates.get("local_evidence_min_score", 0.45))
-        return any(chunk.score >= threshold for chunk in state.retrieval_results)
+        semantic_threshold = float(self.config.gates.get("local_evidence_min_semantic_score", 0.25))
+        for chunk in state.retrieval_results:
+            if chunk.score < threshold:
+                continue
+            breakdown = getattr(chunk, "score_breakdown", {}) or {}
+            method = getattr(chunk, "retrieval_method", "keyword")
+            if "semantic" in method and breakdown.get("semantic", 0.0) < semantic_threshold:
+                continue
+            return True
+        return False
 
     def _act_or_answer(self, state: AgentState) -> None:
         if state.gate_decisions[-1].status != "allow":
@@ -685,3 +715,37 @@ def _is_identity_question(value: str) -> bool:
         r"\bwhat can you do\b",
     ]
     return any(re.search(pattern, text) for pattern in english_patterns)
+
+
+def _knowledge_methods(config: dict[str, Any]) -> list[str]:
+    methods = config.get("retrieval_methods")
+    if isinstance(methods, str):
+        return [item.strip() for item in methods.split(",") if item.strip()]
+    if isinstance(methods, list):
+        return [str(item).strip() for item in methods if str(item).strip()]
+    index_type = str(config.get("index_type", "keyword")).strip() or "keyword"
+    if index_type in {"hybrid", "local-hybrid"}:
+        return ["bm25", "semantic", "graph"]
+    if index_type in {"local-keyword", "keyword"}:
+        return ["keyword"]
+    return [index_type]
+
+
+def _knowledge_fallback_methods(config: dict[str, Any]) -> list[str]:
+    methods = config.get("fallback_methods")
+    if isinstance(methods, str):
+        return [item.strip() for item in methods.split(",") if item.strip()]
+    if isinstance(methods, list):
+        return [str(item).strip() for item in methods if str(item).strip()]
+    if bool(config.get("wiki_enabled", False)):
+        return ["wiki"]
+    return []
+
+
+def _dedupe_knowledge_chunks(chunks: list[KnowledgeChunk]) -> list[KnowledgeChunk]:
+    best: dict[tuple[str, str], KnowledgeChunk] = {}
+    for chunk in chunks:
+        key = (chunk.source, chunk.span)
+        if key not in best or chunk.score > best[key].score:
+            best[key] = chunk
+    return sorted(best.values(), key=lambda item: (-item.score, item.source, item.span))

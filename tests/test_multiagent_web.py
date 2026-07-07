@@ -1012,6 +1012,9 @@ class MultiAgentWebTests(unittest.TestCase):
             self.assertIn("多 Agent 运行时", html)
             self.assertIn("工作流点线图", html)
             self.assertIn("路由/审查", html)
+            self.assertIn("data-chat-mode", html)
+            self.assertIn("搭建助手", html)
+            self.assertIn("/配置", html)
             self.assertIn("progressBanner", html)
             self.assertIn("workflowGraph", html)
             self.assertIn("/assets/vendor/cytoscape.min.js", html)
@@ -1033,11 +1036,30 @@ class MultiAgentWebTests(unittest.TestCase):
             self.assertIn("workflowLoopNodeOrder", script)
             self.assertIn("selectedWorkflowElement", script)
             self.assertIn("handleWorkflowGraphSelection", script)
+            self.assertIn("focusWorkflowSelectionPanel", script)
+            self.assertIn("selection-focus", script)
             self.assertIn("renderWorkflowSelectionPanel", script)
             self.assertIn("workflowEdgeTransitionDetails", script)
             self.assertIn("renderArtifactBlock", script)
             self.assertIn("renderWorkflowEditor", script)
+            self.assertIn("renderAgentsEditor", script)
+            self.assertIn("builderVisibleAgents", script)
+            self.assertIn("builderVisibleWorkflowNodes", script)
+            self.assertIn("搭建视图", script)
+            self.assertIn("setChatMode", script)
+            self.assertIn("isConfiguratorMessage", script)
+            self.assertIn("sendConfiguratorMessage", script)
+            self.assertIn("/api/configurator/compose", script)
+            self.assertNotIn("configuratorDraftAgents", script)
+            self.assertNotIn("configuratorDraftWorkflow", script)
+            self.assertNotIn("configurator-draft", script)
+            self.assertNotIn("agentConfiguratorPrompt", script)
+            self.assertNotIn("workflowConfiguratorPrompt", script)
+            self.assertIn("/api/agents/draft", script)
+            self.assertIn("/api/agents/proposal", script)
+            self.assertIn("/api/agents/apply", script)
             self.assertIn("data-workflow-action", script)
+            self.assertIn("data-agent-action", script)
             self.assertIn("/api/workflow/draft", script)
             self.assertIn("/api/workflow/proposal", script)
             self.assertIn("/api/workflow/apply", script)
@@ -1070,9 +1092,16 @@ class MultiAgentWebTests(unittest.TestCase):
             self.assertIn(".workflow-graph-canvas", css)
             self.assertIn(".workflow-graph-legend", css)
             self.assertIn(".workflow-selection", css)
+            self.assertIn(".workflow-selection.selection-focus", css)
             self.assertIn(".workflow-selection-grid", css)
             self.assertIn(".workflow-editor", css)
             self.assertIn(".workflow-edit-grid", css)
+            self.assertIn(".agent-editor", css)
+            self.assertIn(".agent-edit-grid", css)
+            self.assertIn(".conversation-modes", css)
+            self.assertIn(".conversation-mode-hint", css)
+            self.assertNotIn(".workflow-configurator", css)
+            self.assertNotIn(".agent-configurator", css)
             self.assertIn("node.selected", script)
             self.assertIn("edge.selected", script)
             self.assertIn("grid-column: 1 / -1", css)
@@ -1102,6 +1131,50 @@ class MultiAgentWebTests(unittest.TestCase):
             server.shutdown()
             thread.join(timeout=5)
             server.server_close()
+
+    def test_rag_query_api_supports_method_switching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agent.yaml").write_text(
+                Path("agent.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            knowledge = root / "knowledge"
+            knowledge.mkdir()
+            (knowledge / "hea.md").write_text(
+                "High entropy alloy strength depends on microstructure and processing history.",
+                encoding="utf-8",
+            )
+            server = create_server(
+                host="127.0.0.1",
+                port=0,
+                config_path=root / "agent.yaml",
+                workspace_root=root,
+                llm_client_factory=lambda _config: FakeDeepSeekClient(),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_address[1]}"
+                payload = _post_json(
+                    f"{base_url}/api/rag/query",
+                    {
+                        "query": "高熵合金强度受哪些微观组织因素影响",
+                        "methods": ["semantic", "graph"],
+                        "top_k": 3,
+                    },
+                )
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                server.server_close()
+
+        self.assertEqual(payload["query"], "高熵合金强度受哪些微观组织因素影响")
+        self.assertEqual(payload["methods"], ["semantic", "graph"])
+        self.assertGreaterEqual(payload["count"], 1)
+        self.assertTrue(payload["results"][0]["source"].endswith("hea.md"))
+        self.assertIn("semantic", payload["results"][0]["score_breakdown"])
+        self.assertIn("graph", payload["results"][0]["retrieval_method"])
 
 
 def _get_json(url):
